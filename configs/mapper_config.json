@@ -1,0 +1,28 @@
+{
+  "count_vectorizer": {
+    "max_features": 100,
+    "token_pattern": "\\b(?:[A-Za-z0-9.-]+[\\.%][A-Za-z]{2,}|%(?:[0-9A-Fa-f]{2})+|[A-Za-z]{3,}\\d*)\\b",
+    "lowercase": false,
+    "min_df": 2,
+    "max_df": 0.5
+  },
+  "frequency_encode": {
+    "normalize": true,
+    "split_every": 8
+  },
+  "count_vectorizer2": {
+    "max_features": 100,
+    "token_pattern": "\\b(?:[A-Za-z0-9.-]+[\\.%][A-Za-z]{2,}|%(?:[0-9A-Fa-f]{2})+|[A-Za-z]{3,}\\d*)\\b",
+    "lowercase": false,
+    "min_df": 20,
+    "max_df": 0.3
+  },
+  "binary_encode": {
+    "bits": 12,
+    "hash_seed": 0,
+    "drop_original": true
+  },
+  "text_stats": {
+    "compression": true
+  }
+}

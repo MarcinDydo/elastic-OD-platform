@@ -1,8 +1,10 @@
 api-kibana.txt
 curl.txt
 .env
+.venv/
+data/
 __pycache__
 cache
-__pycache__/*
-test
+__pycache__/
+test/
 

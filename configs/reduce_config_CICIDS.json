@@ -1,0 +1,27 @@
+{
+  "bag_1": {
+    "features": {
+      "URL": {
+        "strategy": "count_vectorizer",
+        "config": "url_tokens"
+      },
+      "Method": "text_stats"
+    },
+    "algo": "isolation_forest",
+    "params": {
+      "n_estimators": 100,
+      "contamination": 0.005
+    }
+  },
+  "bag_2": {
+    "features": {
+      "lenght": "standardize",
+      "Method": "text_stats"
+    },
+    "algo": "dbscan",
+    "params": {
+      "eps": 0.05,
+      "min_samples": 5
+    }
+  }
+}

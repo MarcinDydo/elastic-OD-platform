@@ -1,0 +1,24 @@
+# Dask Outlier Detection Pipeline
+# Install with: pip install -r requirements.txt
+
+# Core distributed computing (Dask only, no Ray)
+dask==2024.12.0
+dask[complete]==2024.12.0
+
+# Data processing
+pandas==2.3.3
+numpy==1.26.4
+
+# Machine Learning
+scikit-learn==1.4.0
+matplotlib==3.8.2
+
+# Outlier Detection
+pyod==2.0.6
+
+# Optional utilities
+python-dotenv==1.0.0
+
+# Visualization (required for dask.visualize)
+graphviz==0.20.3
+random-string-detector==1.1.1
