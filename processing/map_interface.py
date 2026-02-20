@@ -2,9 +2,10 @@ from abc import ABC, abstractmethod
 from collections import Counter
 import math
 import re
-from typing import Callable, List, Optional
-from sklearn.feature_extraction.text import CountVectorizer
+from typing import Callable, List, Optional, Tuple
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 import zlib
+import numpy as np
 import dask.dataframe as dd
 import pandas as pd
 from dask.delayed import delayed
@@ -100,27 +101,197 @@ class MapInterface(ABC):
         return dd.from_delayed(transformed, meta=meta) #delayed dataframes / sparse matrix
 
     @staticmethod
-    def frequency_encode(series: dd.Series, column: str, normalize: bool = False) -> dd.DataFrame:
+    def tfidf_vectorize(
+        series: dd.Series,
+        column: Optional[str] = None,
+        max_features: int = 100,
+        token_pattern: str = r"\b\w+\b",
+        lowercase: bool = False,
+        min_df: int = 2,
+        max_df: float = 0.5,
+        sublinear_tf: bool = True,
+    ) -> dd.DataFrame:
+        series = series.fillna("").astype(str)
+        prefix = f"{column}__" if column else ""
+        columns = [f"{prefix}{i}" for i in range(max_features)]
+
         partitions = series.to_delayed()
-        
+
         @delayed
-        def _compute_freqs(parts, normalize):
+        def _fit(parts):
             full = pd.concat(parts)
-            counts = full.value_counts()
-            if normalize:
-                counts = counts / counts.sum()
-            return counts
-        
+            vec = TfidfVectorizer(
+                max_features=max_features,
+                token_pattern=token_pattern,
+                lowercase=lowercase,
+                min_df=min_df,
+                max_df=max_df,
+                sublinear_tf=sublinear_tf,
+            )
+            vec.fit(full)
+            return vec
+
         @delayed
-        def _transform(part, freqs):
-            mapped = part.map(freqs).astype("float64").fillna(0)
-            return mapped.to_frame(name=column)
-        
-        freqs = _compute_freqs(partitions, normalize)
-        transformed = [_transform(p, freqs) for p in partitions]
-        
-        meta = pd.DataFrame({column: pd.Series(dtype='float64')})
-        return dd.from_delayed(transformed, meta=meta) # Return DataFrame, not Series
+        def _transform(part, vec):
+            arr = vec.transform(part).toarray()
+            return pd.DataFrame(arr, index=part.index, columns=columns, dtype='float64')
+
+        fitted = _fit(partitions)
+        transformed = [_transform(p, fitted) for p in partitions]
+
+        meta = pd.DataFrame({c: pd.Series(dtype='float64') for c in columns})
+        return dd.from_delayed(transformed, meta=meta)
+
+    @staticmethod
+    def word_ngram_vectorize(
+        series: dd.Series,
+        column: Optional[str] = None,
+        max_features: int = 100,
+        token_pattern: str = r"\b\w+\b",
+        lowercase: bool = False,
+        min_df: int = 2,
+        max_df: float = 0.5,
+        ngram_range: tuple = (2, 2),
+    ) -> dd.DataFrame:
+        """Bag of word n-grams. Default is bigrams; set ngram_range=(3,3) for trigrams, etc."""
+        series = series.fillna("").astype(str)
+        prefix = f"{column}__" if column else ""
+        columns = [f"{prefix}{i}" for i in range(max_features)]
+
+        partitions = series.to_delayed()
+
+        @delayed
+        def _fit(parts):
+            full = pd.concat(parts)
+            vec = CountVectorizer(
+                max_features=max_features,
+                token_pattern=token_pattern,
+                ngram_range=tuple(ngram_range),
+                analyzer="word",
+                lowercase=lowercase,
+                min_df=min_df,
+                max_df=max_df,
+            )
+            vec.fit(full)
+            return vec
+
+        @delayed
+        def _transform(part, vec):
+            arr = vec.transform(part).toarray()
+            return pd.DataFrame(arr, index=part.index, columns=columns, dtype='int64')
+
+        fitted = _fit(partitions)
+        transformed = [_transform(p, fitted) for p in partitions]
+
+        meta = pd.DataFrame({c: pd.Series(dtype='int64') for c in columns})
+        return dd.from_delayed(transformed, meta=meta)
+
+    @staticmethod
+    def char_vectorize(
+        series: dd.Series,
+        column: Optional[str] = None,
+        max_features: int = 100,
+        ngram_range: tuple = (2, 4),
+        analyzer: str = "char_wb",
+        lowercase: bool = False,
+        min_df: int = 2,
+        max_df: float = 0.5,
+    ) -> dd.DataFrame:
+        series = series.fillna("").astype(str)
+        prefix = f"{column}__" if column else ""
+        columns = [f"{prefix}{i}" for i in range(max_features)]
+
+        partitions = series.to_delayed()
+
+        @delayed
+        def _fit(parts):
+            full = pd.concat(parts)
+            vec = CountVectorizer(
+                max_features=max_features,
+                ngram_range=tuple(ngram_range),
+                analyzer=analyzer,
+                lowercase=lowercase,
+                min_df=min_df,
+                max_df=max_df,
+            )
+            vec.fit(full)
+            return vec
+
+        @delayed
+        def _transform(part, vec):
+            arr = vec.transform(part).toarray()
+            return pd.DataFrame(arr, index=part.index, columns=columns, dtype='int64')
+
+        fitted = _fit(partitions)
+        transformed = [_transform(p, fitted) for p in partitions]
+
+        meta = pd.DataFrame({c: pd.Series(dtype='int64') for c in columns})
+        return dd.from_delayed(transformed, meta=meta)
+
+    @staticmethod
+    def frequency_encode(
+        series: dd.Series,
+        column: str,
+        normalize: bool = False,
+        max_features: int = 20,
+        token_pattern: str = r"[^\s/\\]+",
+        min_df: int = 2,
+        max_df: float = 0.5,
+    ) -> dd.DataFrame:
+        """Positional IDF encoding via sklearn TfidfVectorizer.
+
+        Tokenizes each value with *token_pattern*, computes IDF across all
+        samples, then writes the IDF of the token at position *i* into column
+        *i* (zero-padded when fewer tokens).  When *normalize* is True each
+        column is min-max scaled to [0, 1].
+        """
+        series = series.fillna("").astype(str)
+        prefix = f"{column}__" if column else ""
+        columns = [f"{prefix}{i}" for i in range(max_features)]
+        partitions = series.to_delayed()
+
+        @delayed
+        def _fit_idf(parts, pattern):
+            full = pd.concat(parts)
+            vec = TfidfVectorizer(
+                token_pattern=pattern,
+                use_idf=True,
+                smooth_idf=True,
+                norm=None,
+                max_features=None,  # vocabulary not limited — we need IDF for every token
+                min_df=min_df,
+                max_df=max_df,
+            )
+            vec.fit(full)
+            # map token -> idf weight
+            return dict(zip(vec.get_feature_names_out(), vec.idf_))
+
+        @delayed
+        def _transform(part, idf_map, pattern, n_features, do_normalize):
+            pat = re.compile(pattern)
+            rows = []
+            for text in part:
+                tokens = pat.findall(text)
+                vec = [idf_map.get(tokens[i], 0.0) if i < len(tokens) else 0.0
+                       for i in range(n_features)]
+                rows.append(vec)
+            arr = np.array(rows, dtype='float64')
+            if do_normalize:
+                col_min = arr.min(axis=0)
+                col_max = arr.max(axis=0)
+                span = col_max - col_min
+                span[span == 0] = 1.0
+                arr = (arr - col_min) / span
+            return pd.DataFrame(arr, index=part.index, columns=columns)
+
+        idf_map = _fit_idf(partitions, token_pattern)
+        transformed = [
+            _transform(p, idf_map, token_pattern, max_features, normalize)
+            for p in partitions
+        ]
+
+        meta = pd.DataFrame({c: pd.Series(dtype='float64') for c in columns})
+        return dd.from_delayed(transformed, meta=meta)
 
     @staticmethod
     def binary_encode(

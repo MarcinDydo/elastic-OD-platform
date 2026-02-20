@@ -16,7 +16,9 @@ def _run_dbscan(frame: pd.DataFrame, params: Dict[str, Any]) -> np.ndarray:
     
     model = DBSCAN(
         eps=params.get('eps', 0.5),
-        min_samples=params.get('min_samples', 5)
+        min_samples=params.get('min_samples', 5),
+        metric=params.get("metric", "euclidean"),
+        algorithm=params.get("algorithm", "auto"),
     )
     labels = model.fit_predict(arr)
     

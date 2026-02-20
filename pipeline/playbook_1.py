@@ -14,6 +14,7 @@ from processing.reduce_interface import ReduceInterface
 from processing.map_interface import MapInterface
 from processing.reducers.isolation_forest import IsolationForestReducer
 from processing.reducers.outlier import TimeSeriesOutlierReducer
+from processing.reducers.ecod import ECODReducer
 
 
 def _csv_columns() -> List[str]:
@@ -55,6 +56,8 @@ def _build_reducers(
                 reducer = TimeSeriesOutlierReducer(name=name, params=params)
             case "isolation_forest":
                 reducer = IsolationForestReducer(name=name, params=params)
+            case "ecod":
+                reducer = ECODReducer(name=name, params=params)
             case _:
                 raise ValueError(f"Unsupported reducer algo: {conf.get('algo')}")
         reducer.features = [f"{f}_{s}" for f, s in features.items()]
@@ -70,6 +73,10 @@ def _build_summary(reducer: ReduceInterface, result: Any, ddf: Any) -> Dict[str,
         algo = "dbscan"
         scores = None
         labels = result
+    elif isinstance(reducer, ECODReducer):
+        algo = "ecod"
+        labels = result[0]
+        scores = result[1]
     else:
         algo = type(reducer).__name__
         scores = None
@@ -78,6 +85,20 @@ def _build_summary(reducer: ReduceInterface, result: Any, ddf: Any) -> Dict[str,
     labels_list = list(labels) if labels is not None else []
     n_samples = len(labels_list)
     anomaly_positions = [idx for idx, label in enumerate(labels_list) if label == -1]
+    # Default: first 100 anomalies in index order
+    anomalies = anomaly_positions[:100]
+
+    if scores is not None:
+        scores_list = list(scores)
+        if scores_list and len(scores_list) == n_samples:
+            # IsolationForest: lower = more anomalous; ECOD: higher = more anomalous
+            sort_descending = not isinstance(reducer, IsolationForestReducer)
+            anomalies = sorted(
+                anomaly_positions,
+                key=lambda pos: scores_list[pos],
+                reverse=sort_descending,
+            )[:100]
+
 
     summary: Dict[str, object] = {
         "name": reducer.name,
@@ -85,7 +106,7 @@ def _build_summary(reducer: ReduceInterface, result: Any, ddf: Any) -> Dict[str,
         "params": getattr(reducer, "params", None),
         "n_samples": n_samples,
         "n_anomalies": len(anomaly_positions),
-        "anomaly_indices": str(anomaly_positions[:100]),
+        "anomaly_indices": str(anomalies),
     }
 
     # Calculate accuracy metrics if ground truth is available
@@ -93,8 +114,10 @@ def _build_summary(reducer: ReduceInterface, result: Any, ddf: Any) -> Dict[str,
         ground_truth = ddf['class'].compute()
         
         # Convert to binary: 1 for anomaly, 0 for normal
-        y_true = (ground_truth == "Anomalous").astype(int).values
-        y_pred = (labels_list == -1).astype(int) if isinstance(labels_list, pd.Series) else [1 if l == -1 else 0 for l in labels_list]
+        y_true = (ground_truth != "Normal").astype(int).values
+        labels_series = labels_list if isinstance(labels_list, pd.Series) else pd.Series(labels_list)
+        y_pred = (labels_series == -1).astype(int).values
+
         
         # Calculate metrics
         from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
@@ -204,3 +227,18 @@ def run(
         output[reducer.name] = [summary]
 
     _print_json("reduce results:", output)
+
+    # Flatten each summary dict (incl. nested dicts) into one row, fill missing with 0
+    flat_rows = []
+    for summaries in output.values():
+        for s in summaries:
+            flat = pd.json_normalize(s, sep="_").iloc[0].to_dict()
+            flat.pop("anomaly_indices", None)
+            flat_rows.append(flat)
+
+    results_df = pd.DataFrame(flat_rows).fillna(0)
+    result_connector = CSVConnector(path=os.environ.get("CSV_RESULT_PATH", "results.csv"))
+    saved_path = result_connector.save(results_df)
+    print(f"Results saved to {saved_path}")
+
+    return output

@@ -1,25 +1,137 @@
 {
-  "bag_1": {
+  "bow_iforest": {
     "features": {
-      "URL": "count_vectorizer",
-      "Method": "frequency_encode"
+      "URL": "count_vectorizer"
     },
     "algo": "isolation_forest",
     "params": {
       "n_estimators": 100,
-      "contamination": 0.005
+      "contamination": 0.1
     }
   },
-  "bag_2": {
+  "bow_dbscan": {
     "features": {
-      "length": "standardize",
-      "Method": "frequency_encode",
-      "URL": "count_vectorizer2"
+      "URL": "count_vectorizer"
     },
     "algo": "dbscan",
     "params": {
       "eps": 0.8,
-      "min_samples": 102
+      "min_samples": 10
+    }
+  },
+  "bow_ecod": {
+    "features": {
+      "URL": "count_vectorizer"
+    },
+    "algo": "ecod",
+    "params": {
+      "contamination": 0.1
+    }
+  },
+  "tfidf_iforest": {
+    "features": {
+      "URL": "tfidf"
+    },
+    "algo": "isolation_forest",
+    "params": {
+      "n_estimators": 100,
+      "contamination": 0.1
+    }
+  },
+  "tfidf_dbscan": {
+    "features": {
+      "URL": "tfidf"
+    },
+    "algo": "dbscan",
+    "params": {
+      "eps": 0.8,
+      "min_samples": 10
+    }
+  },
+  "tfidf_ecod": {
+    "features": {
+      "URL": "tfidf"
+    },
+    "algo": "ecod",
+    "params": {
+      "contamination": 0.1
+    }
+  },
+  "char_iforest": {
+    "features": {
+      "URL": "char_vectorizer"
+    },
+    "algo": "isolation_forest",
+    "params": {
+      "n_estimators": 100,
+      "contamination": 0.1
+    }
+  },
+  "char_dbscan": {
+    "features": {
+      "URL": "char_vectorizer"
+    },
+    "algo": "dbscan",
+    "params": {
+      "eps": 0.8,
+      "min_samples": 10
+    }
+  },
+  "char_ecod": {
+    "features": {
+      "URL": "char_vectorizer"
+    },
+    "algo": "ecod",
+    "params": {
+      "contamination": 0.1
+    }
+  },
+  "bon_iforest": {
+    "features": {
+      "URL": "ngram_vectorizer"
+    },
+    "algo": "isolation_forest",
+    "params": {
+      "n_estimators": 100,
+      "contamination": 0.1
+    }
+  },
+  "bon_dbscan": {
+    "features": {
+      "URL": "ngram_vectorizer"
+    },
+    "algo": "dbscan",
+    "params": {
+      "eps": 0.8,
+      "min_samples": 10
+    }
+  },
+  "bon_ecod": {
+    "features": {
+      "URL": "ngram_vectorizer"
+    },
+    "algo": "ecod",
+    "params": {
+      "contamination": 0.1
+    }
+  },
+  "freq_iforest": {
+    "features": {
+      "URL": "frequency_encode"
+    },
+    "algo": "isolation_forest",
+    "params": {
+      "n_estimators": 100,
+      "contamination": 0.1
+    }
+  },
+  "freq_ecod": {
+    "features": {
+      "URL": "frequency_encode"
+    },
+    "algo": "ecod",
+    "params": {
+      "contamination": 0.1
     }
   }
 }

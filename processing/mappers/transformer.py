@@ -47,24 +47,59 @@ def _apply_strategy(
                 token_pattern=params["token_pattern"],
                 lowercase=params["lowercase"],
             )  # returns delayed DataFrame /list of dealyed object from map_partitions 
-        case "count_vectorizer2":
+        case "ngram_vectorizer":
             params = strategy_params.get(strategy, {})
-            return MapInterface.count_vectorize(
+            return MapInterface.word_ngram_vectorize(
                 series,
                 column=feature_name,
-                max_features=params["max_features"],
-                token_pattern=params["token_pattern"],
-                lowercase=params["lowercase"],
+                max_features=params.get("max_features", 100),
+                token_pattern=params.get("token_pattern", r"\b\w+\b"),
+                lowercase=params.get("lowercase", False),
+                min_df=params.get("min_df", 2),
+                max_df=params.get("max_df", 0.5),
+                ngram_range=tuple(params.get("ngram_range", [2, 2])),
             )
         case "frequency_encode":
             params = strategy_params.get(strategy, {})
-            return MapInterface.frequency_encode(series, column=feature_name, normalize=params["normalize"])  # Already returns DataFrame
+            return MapInterface.frequency_encode(
+                series,
+                column=feature_name,
+                normalize=params.get("normalize", False),
+                max_features=params.get("max_features", 20),
+                token_pattern=params.get("token_pattern", r"[^\s/\\]+"),
+                min_df=params.get("min_df", 2),
+                max_df=params.get("max_df", 0.5),
+            )
         case "binary_encode":
             params = strategy_params.get(strategy, {})
             return MapInterface.binary_encode(
                 series, column=feature_name, drop_original=params["drop_original"],
                 bits=params["bits"], hash_seed=params["hash_seed"],
             )  # Already returns DataFrame
+        case "tfidf":
+            params = strategy_params.get(strategy, {})
+            return MapInterface.tfidf_vectorize(
+                series,
+                column=feature_name,
+                max_features=params.get("max_features", 100),
+                token_pattern=params.get("token_pattern", r"\b\w+\b"),
+                lowercase=params.get("lowercase", False),
+                min_df=params.get("min_df", 2),
+                max_df=params.get("max_df", 0.5),
+                sublinear_tf=params.get("sublinear_tf", True),
+            )
+        case "char_vectorizer":
+            params = strategy_params.get(strategy, {})
+            return MapInterface.char_vectorize(
+                series,
+                column=feature_name,
+                max_features=params.get("max_features", 100),
+                ngram_range=tuple(params.get("ngram_range", [2, 4])),
+                analyzer=params.get("analyzer", "char_wb"),
+                lowercase=params.get("lowercase", False),
+                min_df=params.get("min_df", 2),
+                max_df=params.get("max_df", 0.5),
+            )
         case _:
             raise ValueError(f"Unknown strategy: {strategy}")
 

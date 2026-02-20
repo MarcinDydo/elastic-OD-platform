@@ -1,21 +1,25 @@
 {
   "count_vectorizer": {
-    "max_features": 100,
-    "token_pattern": "\\b(?:[A-Za-z0-9.-]+[\\.%][A-Za-z]{2,}|%(?:[0-9A-Fa-f]{2})+|[A-Za-z]{3,}\\d*)\\b",
+    "max_features": 200,
+    "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
     "lowercase": false,
-    "min_df": 2,
+    "min_df": 10,
     "max_df": 0.5
   },
   "frequency_encode": {
-    "normalize": true,
-    "split_every": 8
+    "normalize": false,
+    "max_features": 200,
+    "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+    "min_df": 10,
+    "max_df": 0.5
   },
-  "count_vectorizer2": {
-    "max_features": 100,
-    "token_pattern": "\\b(?:[A-Za-z0-9.-]+[\\.%][A-Za-z]{2,}|%(?:[0-9A-Fa-f]{2})+|[A-Za-z]{3,}\\d*)\\b",
+  "ngram_vectorizer": {
+    "max_features": 200,
+    "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
     "lowercase": false,
-    "min_df": 20,
-    "max_df": 0.3
+    "min_df": 10,
+    "max_df": 0.5,
+    "ngram_range": [2, 2]
   },
   "binary_encode": {
     "bits": 12,
@@ -24,5 +28,21 @@
   },
   "text_stats": {
     "compression": true
+  },
+  "tfidf": {
+    "max_features": 200,
+    "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+    "lowercase": false,
+    "min_df": 10,
+    "max_df": 0.5,
+    "sublinear_tf": true
+  },
+  "char_vectorizer": {
+    "max_features": 200,
+    "ngram_range": [2, 4],
+    "analyzer": "char_wb",
+    "lowercase": false,
+    "min_df": 10,
+    "max_df": 0.5
   }
 }
