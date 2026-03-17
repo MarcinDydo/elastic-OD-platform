@@ -18,7 +18,7 @@ def _flatten_dict(data: Dict[str, Any], parent: str = "", sep: str = ".") -> Dic
     return dict(items)
 
 
-#https://docs.dask.org/en/latest/dataframe-create.html#mapping-from-a-function - custom delayed df from map 
+#https://docs.dask.org/en/latest/dataframe-create.html#mapping-from-a-function -  delayed df from map 
 
 @dataclass
 class ElasticConnector(DataConnector):

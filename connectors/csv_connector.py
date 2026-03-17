@@ -9,11 +9,20 @@ from .connector_interface import DataConnector
 
 @dataclass
 class CSVConnector(DataConnector):
-    path: str
-    blocksize: Optional[str] = "64MB"
-    assume_missing: bool = False
+    path: Optional[str] = None
+    blocksize: Optional[str] = None
+    assume_missing: Optional[bool] = None
     usecols: Optional[Sequence[str]] = None
     dataframe: Optional[dd.DataFrame] = None
+
+    def __post_init__(self):
+        if self.path is None:
+            self.path = os.getenv("CSV_PATH")
+        if self.blocksize is None:
+            self.blocksize = os.getenv("CSV_BLOCKSIZE", "64MB")
+        if self.assume_missing is None:
+            env_val = os.getenv("CSV_ASSUME_MISSING", "")
+            self.assume_missing = env_val.lower() in ("true", "1", "yes") if env_val else False
 
     def load(self, usecols: Optional[Sequence[str]] = None) -> dd.DataFrame:
         if usecols is not None:
@@ -33,5 +42,5 @@ class CSVConnector(DataConnector):
             raise RuntimeError("CSV_RESULT_PATH is required for saving results.")
         if isinstance(df, dd.DataFrame):
             df = df.compute()
-        df.to_csv(out, index=False)
+        df.to_csv(out, index=False, sep=";")
         return out

@@ -1,0 +1,374 @@
+{
+  "tfidf_svd": {
+    "features": {
+      "URL": {
+        "sklearn.feature_extraction.text.TfidfVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 300,
+            "lowercase": false
+          },
+          "grid": {
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        },
+        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
+          "params": { "n_components": 50 }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+   "tfidf": {
+    "features": {
+      "URL": {
+        "sklearn.feature_extraction.text.TfidfVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 100,
+            "lowercase": false
+          },
+          "grid": {
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+
+  "bon_svd": {
+    "features": {
+      "URL": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 300,
+            "lowercase": false
+          },
+          "grid": {
+            "ngram_range": [[2, 2], [2, 3]],
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        },
+        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
+          "params": { "n_components": 50 }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+  "freq": {
+    "features": {
+      "URL": {
+        "pipeline.transformers.wrappers.PositionalIDFWrapper": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 100,
+            "normalize": false
+          },
+          "grid": {
+            "min_df": [10, 20],
+            "max_df": [0.3, 0.5]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 0.8],
+            "min_samples": [10, 15]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+  "bow": {
+    "features": {
+      "URL": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 100,
+            "lowercase": false
+          },
+          "grid": {
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [
+        {
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }
+    ],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+  "freq_svd": {
+    "features": {
+      "URL": {
+        "pipeline.transformers.wrappers.PositionalIDFWrapper": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 100,
+            "normalize": false
+          },
+          "grid": {
+            "min_df": [10, 20],
+            "max_df": [0.3, 0.5]
+          }
+        },
+        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
+          "params": { "n_components": 50 }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 0.8],
+            "min_samples": [10, 15]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+  
+  "char": {
+    "features": {
+      "URL": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "analyzer": "char_wb",
+            "lowercase": false,
+            "max_features": 100
+          },
+          "grid": {
+            "ngram_range": [[2, 3]],
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+
+  "bon": {
+    "features": {
+      "URL": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,}\\b",
+            "max_features": 100,
+            "lowercase": false
+          },
+          "grid": {
+            "ngram_range": [[2, 2], [2, 3]],
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  },
+  "char_svd": {
+    "features": {
+      "URL": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "analyzer": "char_wb",
+            "lowercase": false,
+            "max_features": 300
+          },
+          "grid": {
+            "ngram_range": [[2, 3]],
+            "min_df": [5, 10],
+            "max_df": [0.3, 0.5]
+          }
+        },
+        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
+          "params": { "n_components": 50 }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "callable": "sklearn.ensemble.IsolationForest",
+        "params": { "n_estimators": 100 },
+        "grid": { "contamination": [0.05, 0.1] }
+      }],
+      "dbscan": [
+        {
+          "callable": "sklearn.cluster.DBSCAN",
+          "grid": {
+            "eps": [0.5, 1.0],
+            "min_samples": [5, 10]
+          }
+        }
+      ],
+      "ecod": [
+        {
+          "callable": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.05, 0.1] }
+        }
+      ]
+    }
+  }
+}

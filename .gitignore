@@ -1,6 +1,7 @@
 api-kibana.txt
 curl.txt
 .env
+.vscode/
 .venv/
 data/
 __pycache__

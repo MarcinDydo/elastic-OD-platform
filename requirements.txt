@@ -15,6 +15,10 @@ matplotlib==3.8.2
 
 # Outlier Detection
 pyod==2.0.6
+pythresh==0.3.8
+
+# Dask ML (feature extraction, GridSearchCV)
+dask-ml==2024.4.4
 
 # Optional utilities
 python-dotenv==1.0.0
