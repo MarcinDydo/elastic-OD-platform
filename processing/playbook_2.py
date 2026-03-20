@@ -47,10 +47,11 @@ OVERRIDES: Dict[str, type] = {
     "sklearn.feature_extraction.text.TfidfVectorizer": TfidfVectorizerWrapper,
 }
 
-def _anomaly_recall(y_true, y_pred):
-    y_pred_binary = (np.asarray(y_pred) == -1).astype(int)
-    return recall_score(y_true, y_pred_binary, zero_division=0)
+Y_CONFIG = os.environ.get("Y_NORMAL_LABELS", "class:Normal").split(":")
 
+def _anomaly_recall(y_true, y_pred):
+    y_pred_binary = (np.asarray(y_pred) == -1).astype("int8") #ones are where the model predicted anomaly
+    return recall_score(y_true, y_pred_binary, zero_division=0)
 
 SCORING = make_scorer(_anomaly_recall)
 
@@ -143,7 +144,9 @@ def _build_summary(
 def build_dags() -> Tuple[Any, Dict[str, Dict], Dict[str, Any]]:
     """Load data and build all strategy pipelines (nothing computed yet)."""
     builder = TransformerBuilder(overrides=OVERRIDES)
-    csv_columns = builder.required_columns()
+
+    Y_config = os.environ.get("Y_NORMAL_LABELS", "class:Normal").split(":")
+    csv_columns = builder.required_columns(Y_config[0])
 
     connector = CSVConnector()
     ddf = connector.load(usecols=csv_columns)
@@ -159,6 +162,7 @@ def build_dags() -> Tuple[Any, Dict[str, Dict], Dict[str, Any]]:
         "required_columns": csv_columns,
         "strategies": list(jobs.keys()),
         "total_tasks": total_tasks,
+        "y_config": Y_config,
     }
     return ddf, jobs, build_info
 
@@ -175,8 +179,9 @@ def run(
 
     #persist data on workers
     ddf = client.persist(ddf)
-    ground_truth = ddf["class"]
-    Y_dask = (ground_truth != "Normal").astype("int8").to_dask_array(lengths=True)
+    
+    ground_truth = ddf[build_info["y_config"][0]]
+    Y_dask = (ground_truth != build_info["y_config"][1]).astype("int8").to_dask_array(lengths=True) #ones are everything that is not labeled Normal
     Y_dask = client.persist(Y_dask)
 
     all_results: Dict[str, List[Dict[str, Any]]] = {}
