@@ -4,11 +4,10 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
+import torch
 from sklearn.model_selection import ParameterGrid
 from dask_ml.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
-
 from pipeline.transformers.utils import FillNaTransformer
 
 logger = logging.getLogger(__name__)
@@ -55,6 +54,18 @@ class TransformerBuilder:
         module_path, _, class_name = dotted_path.rpartition(".")
         module = importlib.import_module(module_path)
         return getattr(module, class_name)
+
+    @staticmethod
+    def _maybe_wrap_pyod(cls, params):
+        """If *cls* is a PyOD BaseDetector, return a PyODDetectorWrapper."""
+        try:
+            from pyod.models.base import BaseDetector
+            if isinstance(cls, type) and issubclass(cls, BaseDetector):
+                from pipeline.transformers.wrappers import PyODDetectorWrapper
+                return PyODDetectorWrapper(pyod_cls=cls, **params)
+        except ImportError:
+            pass
+        return cls(**params)
 
     def _build_feature_pipes(
         self,
@@ -131,7 +142,7 @@ class TransformerBuilder:
                     static_params[param_name] = thresh_instance
                     grid.pop(param_name, None)
 
-                instance = cls(**static_params)
+                instance = self._maybe_wrap_pyod(cls, static_params)
                 pipeline_steps.append((step_label, instance))
 
                 if grid:

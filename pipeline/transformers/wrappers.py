@@ -1,16 +1,17 @@
 import logging
 import re
-import pandas as pd 
+import pandas as pd
 import numpy as np
-from pyod.models.ecod import ECOD
-from sklearn.cluster import DBSCAN
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.neighbors import NearestNeighbors
+from sklearn.utils.validation import check_array, check_is_fitted
 from dask_ml.feature_extraction.text import CountVectorizer
-from sklearn.ensemble import IsolationForest
 import dask.array as da
 from dask_ml.decomposition import TruncatedSVD
 import dask.dataframe as dd
+from pyod.models import *
+from pyod.models.base import BaseDetector
 
 logger = logging.getLogger(__name__)
 
@@ -87,78 +88,68 @@ class CountVectorizerWrapper(BaseEstimator, TransformerMixin):
         self._model = CountVectorizer(**self._cv_params)
         return self._densify_dask(self._model.fit_transform(raw_documents, y))
 
-class DBSCANWrapper(BaseEstimator):
-    """wrapper around DBSCAN.
-    Normalises labels so that -1 = outlier and 1 = inlier, matching
-    the convention used by sklearn.
-    DBSCAN is transductive — fit() is a no-op, the expensive O(n²) distance computation in predict()
+
+class PyODDetectorWrapper(BaseEstimator):
+    """Generic wrapper for any PyOD BaseDetector subclass.
+
+    Bridges PyOD to the sklearn Pipeline/GridSearchCV interface:
+    - Materializes dask arrays to numpy (block-by-block to limit peak memory)
+    - Converts PyOD labels (0=inlier, 1=outlier) to sklearn convention (1=inlier, -1=outlier)
+    - Exposes labels_ and decision_scores_ after fit
+    - PyThresh objects in contamination flow through to PyOD natively
     """
 
-    def __init__(self, eps=0.5, min_samples=5, metric="euclidean", algorithm="auto"):
-        self.eps = eps
-        self.min_samples = min_samples
-        self.metric = metric
-        self.algorithm = algorithm
+    def __init__(self, pyod_cls=None, **kwargs):
+        self.pyod_cls = pyod_cls
+        self._init_kwargs = dict(kwargs)
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-    def fit(self, X, y=None):
+    def get_params(self, deep=True):
+        params = {"pyod_cls": self.pyod_cls}
+        params.update(self._init_kwargs)
+        return params
+
+    def set_params(self, **params):
+        if "pyod_cls" in params:
+            self.pyod_cls = params.pop("pyod_cls")
+        self._init_kwargs.update(params)
+        for key, value in params.items():
+            setattr(self, key, value)
         return self
 
-    def predict(self, X):
-        arr = np.asarray(X, dtype="float64")
-        arr = np.nan_to_num(arr, nan=0.0)
-        model = DBSCAN(
-            eps=self.eps,
-            min_samples=self.min_samples,
-            metric=self.metric,
-            algorithm=self.algorithm,
-        )
-        raw_labels = model.fit_predict(arr)
-        self.labels_ = np.where(raw_labels == -1, -1, 1)
-        return self.labels_
-
-    def fit_predict(self, X, y=None):
-        return self.predict(X)
-
-    def decision_function(self, X):
-        return np.zeros(np.asarray(X).shape[0])
-
-class ECODWrapper(BaseEstimator):
-    """wrapper around pyod ECOD.
-    Converts pyod convention (1 = outlier) to sklearn convention
-    (-1 = outlier, 1 = inlier).
-
-    The ``contamination`` parameter accepts either a float (pyod default)
-    or a pythresh Thresholder instance (e.g. ``FILTER()``).  When a
-    thresholder is passed, ECOD is fitted with a placeholder contamination
-    and the thresholder's ``eval()`` method determines the final labels.
-    """
-
-    def __init__(self, contamination=0.1):
-        self.contamination = contamination
-
-    def fit(self, X, y=None):
-        arr = np.asarray(X, dtype="float64")
-        arr = np.nan_to_num(arr, nan=0.0)
-
-        use_thresholder = hasattr(self.contamination, "eval")
-
-        if use_thresholder:
-            self._model = ECOD(contamination=0.5)
-            self._model.fit(arr)
-            self.decision_scores_ = self._model.decision_scores_
-            raw_labels = self.contamination.eval(self.decision_scores_)
-            self.labels_ = np.where(np.asarray(raw_labels) == 1, -1, 1)
+    @staticmethod
+    def _to_numpy(X):
+        """Materialize dask/sparse to dense numpy, block-by-block for dask."""
+        if isinstance(X, da.Array):
+            chunks = []
+            for i in range(X.numblocks[0]):
+                block = X.blocks[i].compute()
+                if hasattr(block, "toarray"):
+                    block = block.toarray()
+                chunks.append(np.asarray(block, dtype="float64"))
+            arr = np.vstack(chunks) if len(chunks) > 1 else chunks[0]
+        elif hasattr(X, "compute"):
+            arr = np.asarray(X.compute(), dtype="float64")
+        elif hasattr(X, "toarray"):
+            arr = np.asarray(X.toarray(), dtype="float64")
         else:
-            self._model = ECOD(contamination=self.contamination)
-            self._model.fit(arr)
-            self.labels_ = np.where(self._model.labels_ == 1, -1, 1)
-            self.decision_scores_ = self._model.decision_scores_
+            arr = np.asarray(X, dtype="float64")
+        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
+    def _build_model(self):
+        return self.pyod_cls(**self._init_kwargs)
+
+    def fit(self, X, y=None):
+        arr = self._to_numpy(X)
+        self._model = self._build_model()
+        self._model.fit(arr)
+        self.labels_ = np.where(self._model.labels_ == 1, -1, 1)
+        self.decision_scores_ = self._model.decision_scores_
         return self
 
     def predict(self, X):
-        arr = np.asarray(X, dtype="float64")
-        arr = np.nan_to_num(arr, nan=0.0)
+        arr = self._to_numpy(X)
         raw = self._model.predict(arr)
         return np.where(raw == 1, -1, 1)
 
@@ -167,39 +158,94 @@ class ECODWrapper(BaseEstimator):
         return self.labels_
 
     def decision_function(self, X):
-        arr = np.asarray(X, dtype="float64")
-        arr = np.nan_to_num(arr, nan=0.0)
+        arr = self._to_numpy(X)
         return self._model.decision_function(arr)
+    
+class AutoencoderWrapper(BaseEstimator, TransformerMixin):
+    """Autoencoder-based dimensionality reduction (feature transformer).
 
-class IsolationForestWrapper(BaseEstimator):
-    """wrapper around IsolationForest.
-    Stores labels_ and decision_scores_ during fit(), matching the
-    pattern used by DBSCANWrapper and ECODWrapper.
+    Builds a symmetric encoder-decoder from ``hidden_neurons`` and trains
+    on reconstruction loss.  After fit the encoder output (last layer of
+    ``hidden_neurons``) is used as the reduced representation.
+
+    Config example::
+
+        "params": {"hidden_neurons": [1000, 500, 50], "epochs": 100}
+
+    Encoder: input_dim → 1000 → 500 → 50  (bottleneck = 50-d output)
+    Decoder: 50 → 500 → 1000 → input_dim
     """
 
-    def __init__(self, n_estimators=100, contamination=0.1):
-        self.n_estimators = n_estimators
-        self.contamination = contamination
+    def __init__(self, hidden_neurons=None, epochs=20, lr=1e-3, batch_size=256):
+        self.hidden_neurons = hidden_neurons or [128, 64]
+        self.epochs = epochs
+        self.lr = lr
+        self.batch_size = batch_size
+
+    @staticmethod
+    def _to_numpy(X):
+        if hasattr(X, "compute"):
+            X = X.compute()
+        if hasattr(X, "toarray"):
+            X = X.toarray()
+        arr = np.asarray(X, dtype="float32")
+        return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
     def fit(self, X, y=None):
-        self._model = IsolationForest(
-            n_estimators=self.n_estimators,
-            contamination=self.contamination,
+        import torch
+        from torch import nn
+
+        arr = self._to_numpy(X)
+        input_dim = arr.shape[1]
+
+        # Build encoder: input_dim → hidden_neurons[0] → … → hidden_neurons[-1]
+        encoder_layers = []
+        prev = input_dim
+        for units in self.hidden_neurons:
+            encoder_layers += [nn.Linear(prev, units), nn.ReLU(), nn.BatchNorm1d(units)]
+            prev = units
+        self.encoder_ = nn.Sequential(*encoder_layers)
+
+        # Build decoder: mirror of encoder back to input_dim
+        decoder_layers = []
+        for units in reversed(self.hidden_neurons[:-1]):
+            decoder_layers += [nn.Linear(prev, units), nn.ReLU(), nn.BatchNorm1d(units)]
+            prev = units
+        decoder_layers.append(nn.Linear(prev, input_dim))
+        decoder = nn.Sequential(*decoder_layers)
+
+        autoencoder = nn.Sequential(self.encoder_, decoder)
+        optimizer = torch.optim.Adam(autoencoder.parameters(), lr=self.lr)
+        criterion = nn.MSELoss()
+
+        dataset = torch.utils.data.TensorDataset(torch.tensor(arr))
+        loader = torch.utils.data.DataLoader(
+            dataset, batch_size=self.batch_size, shuffle=True,
         )
-        self.labels_ = self._model.fit_predict(X)
-        self.decision_scores_ = self._model.decision_function(X)
+
+        autoencoder.train()
+        for _ in range(self.epochs):
+            for (batch,) in loader:
+                optimizer.zero_grad()
+                loss = criterion(autoencoder(batch), batch)
+                loss.backward()
+                optimizer.step()
+
+        self.encoder_.eval()
         return self
 
-    def predict(self, X):
-        return self._model.predict(X)
+    def transform(self, X, y=None):
+        import torch
+        arr = self._to_numpy(X)
+        with torch.no_grad():
+            encoded = self.encoder_(torch.tensor(arr)).numpy()
+        return encoded.astype("float64")
 
-    def fit_predict(self, X, y=None):
+    def fit_transform(self, X, y=None):
         self.fit(X, y)
-        return self.labels_
+        return self.transform(X)
 
-    def decision_function(self, X):
-        return self._model.decision_function(X)
-    
+
 class TruncatedSVDWrapper(BaseEstimator, TransformerMixin):
     """wrapper around dask_ml TruncatedSVD.
     Accepts sparse, dense, or dask input and always returns a dask array
@@ -300,3 +346,73 @@ class PositionalIDFWrapper(BaseEstimator, TransformerMixin):
         return arr
 
 
+class HDBSCAN(BaseDetector):
+    """Local reimplementation of PyOD's HDBSCAN detector.
+
+    PyOD removed ``pyod.models.hdbscan`` so we re-implement it here as a
+    ``BaseDetector`` subclass wrapping ``sklearn.cluster.HDBSCAN``.  Outlier
+    score is ``1 - probabilities_`` (noise points get 1.0).  For scoring
+    unseen points we use weighted KNN interpolation over the training
+    scores.
+    """
+
+    def __init__(self, min_cluster_size=5, min_samples=None,
+                 metric='euclidean', alpha=1.0, algorithm='auto',
+                 leaf_size=40, n_jobs=1, contamination=0.1):
+        super(HDBSCAN, self).__init__(contamination=contamination)
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.metric = metric
+        self.alpha = alpha
+        self.algorithm = algorithm
+        self.leaf_size = leaf_size
+        self.n_jobs = n_jobs
+
+    def fit(self, X, y=None):
+        X = check_array(X)
+        self._set_n_classes(y)
+
+        try:
+            from sklearn.cluster import HDBSCAN as sklearn_HDBSCAN
+        except Exception as e:
+            raise ImportError(
+                "HDBSCAN requires scikit-learn with sklearn.cluster.HDBSCAN. "
+                "Please upgrade scikit-learn."
+            ) from e
+
+        self.detector_ = sklearn_HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            metric=self.metric,
+            alpha=self.alpha,
+            algorithm=self.algorithm,
+            leaf_size=self.leaf_size,
+            store_centers='centroid',
+        )
+        self.detector_.fit(X)
+
+        self.cluster_labels_ = self.detector_.labels_
+        self.decision_scores_ = 1.0 - self.detector_.probabilities_
+        self._process_decision_scores()
+
+        self.X_train_ = X
+        self.tree_ = NearestNeighbors(
+            n_neighbors=min(self.min_cluster_size, X.shape[0]),
+            metric=self.metric,
+            n_jobs=self.n_jobs,
+        )
+        self.tree_.fit(X)
+
+        return self
+
+    def decision_function(self, X):
+        check_is_fitted(self, ['decision_scores_', 'threshold_', 'labels_'])
+        X = check_array(X)
+
+        dist, ind = self.tree_.kneighbors(X)
+        weights = 1.0 / (dist + 1e-10)
+        weights = weights / weights.sum(axis=1, keepdims=True)
+
+        neighbor_scores = self.decision_scores_[ind]
+        scores = np.sum(weights * neighbor_scores, axis=1)
+        return scores.ravel()

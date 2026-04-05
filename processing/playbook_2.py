@@ -12,7 +12,7 @@ import os
 import time
 import ctypes
 from typing import Any, Dict, List, Optional, Tuple
-
+import torch
 import numpy as np
 import pandas as pd
 from dask.distributed import Client
@@ -28,10 +28,9 @@ from sklearn.metrics import (
 from connectors.csv_connector import CSVConnector
 from pipeline.builder import TransformerBuilder
 from pipeline.transformers.wrappers import (
+    AutoencoderWrapper,
     CountVectorizerWrapper,
-    DBSCANWrapper,
-    ECODWrapper,
-    IsolationForestWrapper,
+    HDBSCAN,
     TfidfVectorizerWrapper,
     TruncatedSVDWrapper,
 )
@@ -41,10 +40,9 @@ logger = logging.getLogger(__name__)
 OVERRIDES: Dict[str, type] = {
     "dask_ml.feature_extraction.text.CountVectorizer": CountVectorizerWrapper,
     "dask_ml.decomposition.TruncatedSVD": TruncatedSVDWrapper,
-    "sklearn.cluster.DBSCAN": DBSCANWrapper,
-    "sklearn.ensemble.IsolationForest": IsolationForestWrapper,
-    "pyod.models.ecod.ECOD": ECODWrapper,
     "sklearn.feature_extraction.text.TfidfVectorizer": TfidfVectorizerWrapper,
+    "pipeline.transformers.wrappers.AutoencoderWrapper": AutoencoderWrapper,
+    "pyod.models.hdbscan.HDBSCAN": HDBSCAN,
 }
 
 Y_CONFIG = os.environ.get("Y_NORMAL_LABELS", "class:Normal").split(":")
@@ -62,6 +60,23 @@ def _trim_memory() -> int:
 
 def _has_dask_steps(pipe):
     return any(getattr(step, "_dask_native", False) for _, step in pipe.steps)
+
+def _chunked_predict(estimator, X_dask):
+    """Predict block-by-block when X_dask has multiple partitions."""
+    if X_dask.numblocks[0] <= 1:
+        arr = X_dask.compute()
+        if hasattr(arr, "toarray"):
+            arr = arr.toarray()
+        return estimator.predict(np.asarray(arr, dtype="float64"))
+
+    predictions = []
+    for i in range(X_dask.numblocks[0]):
+        block = X_dask.blocks[i].compute()
+        if hasattr(block, "toarray"):
+            block = block.toarray()
+        predictions.append(estimator.predict(np.asarray(block, dtype="float64")))
+
+    return np.concatenate(predictions)
 
 def _build_summary(
     task_name: str,
@@ -250,7 +265,8 @@ def run(
                 logger.debug("    Running GridSearchCV on client: %s", task_name)
                 t0 = time.perf_counter()
                 search.fit(X_dask, y=Y_dask) #Find best (seach is dask compatible)
-                search.best_estimator_.steps[-1][1].labels_ = client.submit(search.best_estimator_.predict, X_dask).result() #save best
+                best_est = search.best_estimator_.steps[-1][1]
+                best_est.labels_ = _chunked_predict(best_est, X_dask)
                 client.run(gc.collect)
                 elapsed = time.perf_counter() - t0
                 logger.info("    Completed in %.1fs: %s", elapsed, task_name)

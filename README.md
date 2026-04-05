@@ -12,7 +12,8 @@ Na windowsie przy pomocy "wsl":
 
 ```
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt && .venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+source .venv/bin/activate
 ```
 
 ## Uruchamianie
