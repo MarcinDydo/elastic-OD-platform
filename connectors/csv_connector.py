@@ -36,11 +36,24 @@ class CSVConnector(DataConnector):
         return self.dataframe #delayed dask.DataFrame object
 
     def save(self, df: Union[pd.DataFrame, dd.DataFrame], path: Optional[str] = None) -> str:
-        """Save a DataFrame to CSV. Uses *path* or CSV_RESULT_PATH env var."""
-        out = path or os.environ.get("CSV_RESULT_PATH")
+        """Save a DataFrame to CSV. Uses *path* or RESULTS_PATH env var."""
+        out = path or os.environ.get("RESULTS_PATH")
         if not out:
-            raise RuntimeError("CSV_RESULT_PATH is required for saving results.")
+            raise RuntimeError("RESULTS_PATH is required for saving results.")
         if isinstance(df, dd.DataFrame):
             df = df.compute()
         df.to_csv(out, index=False, sep=";")
+        return out
+
+    def save_row(self, row: Union[dict, pd.Series], path: Optional[str] = None) -> str:
+        """Append a single row to TARGET_PATH (writes header on first call)."""
+        out = path or os.environ.get("TARGET_PATH")
+        if not out:
+            raise RuntimeError("TARGET_PATH is required for dumping anomalies.")
+        if isinstance(row, dict):
+            df = pd.json_normalize(row, sep="_")
+        else:
+            df = pd.DataFrame([row])
+        header = not os.path.exists(out)
+        df.to_csv(out, index=False, sep=";", mode="a", header=header)
         return out

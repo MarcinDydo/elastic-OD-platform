@@ -1,9 +1,6 @@
-"""Playbook 2 — config-driven outlier detection with grid expansion.
-Build Pipelines / GridSearchCV objects, then executes them sequentially
-per strategy on a Dask cluster with memory cleanup between jobs.
+"""Playbook for benchmarking point anomaly detection — config-driven outlier detection with grid expansion.
 """
 from dask_ml.model_selection import GridSearchCV
-import dask
 import dask.array as da
 import gc
 import json
@@ -27,19 +24,15 @@ from sklearn.metrics import (
 
 from connectors.csv_connector import CSVConnector
 from pipeline.builder import TransformerBuilder
-from pipeline.transformers.wrappers import (
+from pipeline.transformations.wrappers import (
     AutoencoderWrapper,
-    CountVectorizerWrapper,
     HDBSCAN,
     TfidfVectorizerWrapper,
-    TruncatedSVDWrapper,
 )
 
 logger = logging.getLogger(__name__)
 
 OVERRIDES: Dict[str, type] = {
-    "dask_ml.feature_extraction.text.CountVectorizer": CountVectorizerWrapper,
-    "dask_ml.decomposition.TruncatedSVD": TruncatedSVDWrapper,
     "sklearn.feature_extraction.text.TfidfVectorizer": TfidfVectorizerWrapper,
     "pipeline.transformers.wrappers.AutoencoderWrapper": AutoencoderWrapper,
     "pyod.models.hdbscan.HDBSCAN": HDBSCAN,
@@ -57,9 +50,6 @@ SCORING = make_scorer(_anomaly_recall)
 def _trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
-
-def _has_dask_steps(pipe):
-    return any(getattr(step, "_dask_native", False) for _, step in pipe.steps)
 
 def _chunked_predict(estimator, X_dask):
     """Predict block-by-block when X_dask has multiple partitions."""
@@ -194,10 +184,20 @@ def run(
 
     #persist data on workers
     ddf = client.persist(ddf)
-    
+
+    # Materialize once on client for anomaly-row slicing per search.
+    full_df = ddf.compute()
+
     ground_truth = ddf[build_info["y_config"][0]]
     Y_dask = (ground_truth != build_info["y_config"][1]).astype("int8").to_dask_array(lengths=True) #ones are everything that is not labeled Normal
     Y_dask = client.persist(Y_dask)
+
+    # Incremental writers — start each run fresh
+    result_connector = CSVConnector()
+    results_path = os.environ.get("RESULTS_PATH")
+    if results_path and os.path.exists(results_path):
+        os.remove(results_path)
+    target_path = os.environ.get("TARGET_PATH")
 
     all_results: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -221,36 +221,32 @@ def run(
 
         #first compute features
         for feat_desc, col_pipes in feature_pipes:
-            all_trained: List[Tuple[str, Any]] = []
-            # 1) Fit-transform feature pipeline
+            # 1) Fit-transform ALL column pipelines, collect arrays
+            logger.debug("  Fitting composite feature pipe: %s", feat_desc)
+            t0 = time.perf_counter()
+            col_arrays = []
             for col_name, pipe in col_pipes.items():
-                logger.debug("  Fitting feature pipe: %s", feat_desc)
-                t0 = time.perf_counter()
-                if _has_dask_steps(pipe):
-                    # Dask-native: run on client so da.linalg.svd etc. use cluster
-                    feature_arr = pipe.fit_transform(ddf[col_name].to_bag())
-                    if isinstance(feature_arr, da.Array):
-                        X_dask = client.persist(feature_arr)
-                    else:
-                        logger.warning("Dask Array not returned from pipe but got %s, pipeline not dask compatible?", type(feature_arr))
-                        if hasattr(feature_arr, "toarray"):
-                            feature_arr = feature_arr.toarray()
-                        arr = np.asarray(feature_arr, dtype="float64")
-                        X_dask = client.persist(da.from_array(arr, chunks="64MB"))
-                else:
-                    # Pure sklearn/numpy: submit to worker, keep data there
-                    future = client.submit(pipe.fit_transform, ddf[col_name].to_bag())
-                    shape = client.submit(lambda x: np.asarray(x).shape, future).result()
-                    X_dask = da.from_delayed(
-                        dask.delayed(future), shape=shape, dtype="float64"
-                    )
-                    X_dask = client.persist(X_dask)
-                elapsed = time.perf_counter() - t0
-                logger.info(
-                    "  Feature '%s' computed in %.1fs  shape=%s",
-                    feat_desc, elapsed, getattr(X_dask, "shape", "?"),
-                )
-                
+                feature_arr = pipe.fit_transform(ddf[col_name].to_bag())
+                if isinstance(feature_arr, da.Array):
+                    feature_arr = feature_arr.compute()
+                elif hasattr(feature_arr, "compute"):
+                    feature_arr = feature_arr.compute()
+                if hasattr(feature_arr, "toarray"):
+                    feature_arr = feature_arr.toarray()
+                arr = np.asarray(feature_arr, dtype="float64")
+                if arr.ndim == 1:
+                    arr = arr.reshape(-1, 1)
+                col_arrays.append(arr)
+
+            # Concatenate all columns horizontally
+            X_combined = np.hstack(col_arrays)
+            X_dask = client.persist(da.from_array(X_combined, chunks="64MB"))
+            del col_arrays, X_combined
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "  Composite feature '%s' computed in %.1fs  shape=%s",
+                feat_desc, elapsed, getattr(X_dask, "shape", "?"),
+            )
 
             # 2) Plain pipelines → batch via dask.delayed TODO
             if pipelines:
@@ -271,17 +267,11 @@ def run(
                 elapsed = time.perf_counter() - t0
                 logger.info("    Completed in %.1fs: %s", elapsed, task_name)
 
-                all_trained.append((task_name, search))
-
-            if searches:
-                del X_dask
-                client.run(gc.collect)
-                client.run(_trim_memory)
-                
-
-            for task_name, trained in all_trained:
-                summary = _build_summary(task_name, trained, ground_truth)
+                # Build summary, append to RESULTS_PATH
+                summary = _build_summary(task_name, search, ground_truth)
+                summary["strategy"] = strategy_name
                 strategy_results.append(summary)
+                result_connector.save_row(summary)
                 logger.info(
                     "  %s  n_anomalies=%d  accuracy=%.4f  precision=%.4f  recall=%.4f  f1=%.4f",
                     task_name,
@@ -291,30 +281,23 @@ def run(
                     summary.get("recall", 0.0),
                     summary.get("f1_score", 0.0),
                 )
-    
-            del all_trained
+
+                # Overwrite TARGET_PATH with this grid's anomaly rows (full columns)
+                if target_path:
+                    anomaly_rows = full_df[best_est.labels_ == -1]
+                    anomaly_rows.to_csv(target_path, index=False, sep=";", mode="w")
+                    logger.info("    Wrote %d anomaly rows to %s", len(anomaly_rows), target_path)
+
+            if searches:
+                del X_dask
+                client.run(gc.collect)
+                client.run(_trim_memory)
+
             gc.collect()
             client.run(gc.collect)
-            
+
         logger.debug("Strategy '%s' complete.\n", strategy_name)
         all_results[strategy_name] = strategy_results
 
     del Y_dask
-
-    # Save gathered results
-    if all_results:
-        flat_rows = []
-        for strategy_name, summaries in all_results.items():
-            for s in summaries:
-                s["strategy"] = strategy_name
-                flat = pd.json_normalize(s, sep="_").iloc[0].to_dict()
-                flat.pop("anomaly_indices", None)
-                flat_rows.append(flat)
-
-        results_df = pd.DataFrame(flat_rows).fillna(0)
-        result_path = os.environ.get("CSV_RESULT_PATH", "results.csv")
-        result_connector = CSVConnector(path=result_path)
-        saved_path = result_connector.save(results_df)
-        logger.info("Results saved to %s", saved_path)
-
     return all_results

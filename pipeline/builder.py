@@ -2,15 +2,46 @@ import importlib
 import logging
 import json
 import os
+from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import torch
+import dask.array as da
 from sklearn.model_selection import ParameterGrid
+from sklearn.preprocessing import FunctionTransformer
 from dask_ml.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
-from pipeline.transformers.utils import FillNaTransformer
+from pipeline.transformations.utils import FillNaTransformer, NanToNumDaskTransformer, WrapStringsTransformer
 
 logger = logging.getLogger(__name__)
+
+
+def _densify_dask(X):
+    """map_blocks toarray() on dask arrays; passthrough for dense input."""
+    if isinstance(X, da.Array):
+        return X.map_blocks(
+            lambda b: b.toarray() if hasattr(b, "toarray") else b,
+            dtype="float64",
+        )
+    if hasattr(X, "toarray"):
+        return X.toarray()
+    return X
+
+
+# (name, position, factory) keyed by canonical dotted path.
+# Auto-inserted by the builder when the corresponding class appears in the
+# feature chain so the config can reference the native dask_ml classes.
+_AUTO_STEPS: Dict[str, List[Tuple[str, str, Any]]] = {
+    "dask_ml.feature_extraction.text.CountVectorizer": [
+        ("densify", "after", lambda: FunctionTransformer(_densify_dask, validate=False)),
+    ],
+    "dask_ml.feature_extraction.text.HashingVectorizer": [
+        ("densify", "after", lambda: FunctionTransformer(_densify_dask, validate=False)),
+    ],
+    "dask_ml.decomposition.TruncatedSVD": [
+        ("nan_to_num", "before", lambda: NanToNumDaskTransformer()),
+    ],
+}
 
 
 class TransformerBuilder:
@@ -61,8 +92,8 @@ class TransformerBuilder:
         try:
             from pyod.models.base import BaseDetector
             if isinstance(cls, type) and issubclass(cls, BaseDetector):
-                from pipeline.transformers.wrappers import PyODDetectorWrapper
-                return PyODDetectorWrapper(pyod_cls=cls, **params)
+                from pipeline.transformations.wrappers import PyODDetectorWrapper
+                return PyODDetectorWrapper(pyod_class=cls, **params)
         except ImportError:
             pass
         return cls(**params)
@@ -71,7 +102,8 @@ class TransformerBuilder:
         self,
         features_spec: Dict[str, Dict[str, Dict]],
     ) -> List[Tuple[str, Dict[str, Pipeline]]]:
-        results: List[Tuple[str, Dict[str, Pipeline]]] = []
+        # Phase 1: build per-column variant lists
+        per_column: Dict[str, List[Tuple[str, Pipeline]]] = {}
 
         for col_name, callables_dict in features_spec.items():
             chain_items = list(callables_dict.items())
@@ -85,6 +117,13 @@ class TransformerBuilder:
                 cls = self._resolve_class(callable_path)
                 step_name = cls.__name__
 
+                auto_steps = _AUTO_STEPS.get(callable_path, [])
+                for a_name, a_pos, _ in auto_steps:
+                    logger.debug(
+                        "Auto-inserting %r step %s %s",
+                        a_name, a_pos, step_name,
+                    )
+
                 new_combos = []
                 for desc_parts, steps_so_far in combos:
                     for grid_params in grid_combos:
@@ -95,18 +134,41 @@ class TransformerBuilder:
                         desc = desc_parts + [f"{step_name}({tag})" if tag else step_name]
                         instance = cls(**merged)
                         step_label = f"{step_name}_{len(steps_so_far)}"
-                        new_steps = steps_so_far + [(step_label, instance)]
-                        new_combos.append((desc, new_steps))
+                        chain = list(steps_so_far)
+                        for a_name, a_pos, a_factory in auto_steps:
+                            if a_pos == "before":
+                                chain.append((f"{a_name}_{len(chain)}", a_factory()))
+                        chain.append((step_label, instance))
+                        for a_name, a_pos, a_factory in auto_steps:
+                            if a_pos == "after":
+                                chain.append((f"{a_name}_{len(chain)}", a_factory()))
+                        new_combos.append((desc, chain))
 
                 combos = new_combos
 
+            col_variants = []
             for desc_parts, steps in combos:
                 desc_str = f"{col_name}__{'__'.join(desc_parts)}"
                 pipe = Pipeline(steps)
                 logger.debug("Feature pipe: %s", desc_str)
-                results.append((desc_str, {col_name: pipe}))
+                col_variants.append((desc_str, pipe))
+            per_column[col_name] = col_variants
 
-        logger.debug("Built %d feature pipes.", len(results))
+        # Phase 2: cross-product across all columns
+        col_names = list(per_column.keys())
+        col_variant_lists = [per_column[c] for c in col_names]
+
+        results: List[Tuple[str, Dict[str, Pipeline]]] = []
+        for combo in product(*col_variant_lists):
+            descs = [item[0] for item in combo]
+            combined_desc = " + ".join(descs)
+            col_pipes = {
+                col_names[i]: combo[i][1]
+                for i in range(len(col_names))
+            }
+            results.append((combined_desc, col_pipes))
+
+        logger.debug("Built %d composite feature pipes.", len(results))
         return results
 
 
@@ -124,7 +186,7 @@ class TransformerBuilder:
             has_grid = False
 
             for idx, step_def in enumerate(steps_list):
-                callable_path = step_def["callable"]
+                callable_path = step_def["class"]
                 static_params = dict(step_def.get("params", {}))
                 grid = step_def.get("grid", {})
                 threshold_spec = step_def.get("threshold", {})
@@ -176,7 +238,7 @@ class TransformerBuilder:
         return pipelines, searches
 
     # Public API - core functionality
-    def build_transformer(
+    def build_transformations(
         self,
         name: str,
         spec: Dict[str, Any],
@@ -213,5 +275,5 @@ class TransformerBuilder:
         strategies: Dict[str, Dict[str, Any]] = {}
         for name, spec in self.config.items():
             logger.debug("Building pipelines for strategy: %s", name)
-            strategies[name] = self.build_transformer(name, spec, scoring_fn)
+            strategies[name] = self.build_transformations(name, spec, scoring_fn)
         return strategies

@@ -1,47 +1,142 @@
 {
-  "char_svd": { 
+  "fasttext":{
     "features": {
-      "URL": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
+      "content": {
+        "pipeline.transformations.wrappers.DocumentPoolWrapper": {
           "params": {
-            "analyzer": "char_wb",
-            "lowercase": true,
-            "min_df": 2
-          },
-          "grid": {
-            "ngram_range": [[2, 2]],
-            "max_features": [500, 800, 1500],
-            "max_df": [0.3, 0.8]
+            "model": "./data/csic-01-fasttext2.bin",
+            "pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,}\\b"
           }
-        },
-        "dask_ml.preprocessing.MinMaxScaler": {
-          "params": { "feature_range": [0, 1] }
-        },
-        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
-          "grid": { "n_components": [100, 200, 300] }
+        }
+      },
+      "URL": {
+        "pipeline.transformations.wrappers.DocumentPoolWrapper": {
+          "params": {
+            "model": "./data/csic-01-fasttext2.bin",
+            "pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,}\\b"
+          }
         }
       }
     },
     "estimators": {
       "isolation_forest": [{
-        "callable": "pyod.models.iforest.IForest",
-        "grid": { "n_estimators": [50, 100],"contamination": [0.1, 0.2, 0.3] }
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": { "contamination": [0.1, 0.2, 0.3] }
       }],
       "lof": [
         {
-          "callable": "pyod.models.lof.LOF",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "hdbscan": [
-        {
-          "callable": "pyod.models.hdbscan.HDBSCAN",
+          "class": "pyod.models.lof.LOF",
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ],
       "vae": [
         {
-          "callable": "pyod.models.vae.VAE",
+          "class": "pyod.models.vae.VAE",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ]
+    }
+  },
+  "ratio":{
+    "features": {
+      "content": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "URL": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": { "contamination": [0.1, 0.2, 0.3] }
+      }],
+      "lof": [
+        {
+          "class": "pyod.models.lof.LOF",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "vae": [
+        {
+          "class": "pyod.models.vae.VAE",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ]
+    }
+  },
+  "tfidf": {
+    "features": {
+      "URL": {
+        "pipeline.transformations.wrappers.TfidfVectorizerWrapper": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,}\\b",
+            "lowercase": false,
+            "max_features": 1000
+          }}
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": { "contamination": [0.1, 0.2, 0.3] }
+      }],
+      "lof": [
+        {
+          "class": "pyod.models.lof.LOF",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "vae": [
+        {
+          "class": "pyod.models.vae.VAE",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ]
+    }
+  },
+  "ngram_tfidf": {
+    "features": {
+      "URL": {
+        "pipeline.transformations.wrappers.TfidfVectorizerWrapper": {
+          "params": {
+            "analyzer": "char_wb",
+            "lowercase": false,
+            "max_features": 1000
+          },
+          "grid": {
+            "max_df": [0.5, 0.8],
+            "ngram_range": [[2, 2]]
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": { "contamination": [0.1, 0.2, 0.3] }
+      }],
+      "lof": [
+        {
+          "class": "pyod.models.lof.LOF",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "vae": [
+        {
+          "class": "pyod.models.vae.VAE",
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ]
@@ -53,11 +148,10 @@
         "dask_ml.feature_extraction.text.CountVectorizer": {
           "params": {
             "analyzer": "char_wb",
-            "lowercase": false
+            "lowercase": false,
+            "max_features": 1000
           },
           "grid": {
-            "max_features": [300, 600, 1000],
-            "min_df": [2, 10],
             "max_df": [0.3, 0.8],
             "ngram_range": [[2, 2]]
           }
@@ -65,91 +159,35 @@
         "pipeline.transformers.wrappers.AutoencoderWrapper": {
           "params": {
             "hidden_neurons": [1000, 500, 50],
-            "epochs": 100
+            "epochs": 30
           }
         }
       }
     },
     "estimators": {
       "isolation_forest": [{
-        "callable": "pyod.models.iforest.IForest",
+        "class": "pyod.models.iforest.IForest",
         "grid": { "n_estimators": [50, 100] ,"contamination": [0.1, 0.2, 0.3]}
       }],
       "lof": [
         {
-          "callable": "pyod.models.lof.LOF",
+          "class": "pyod.models.lof.LOF",
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ],
       "hdbscan": [
         {
-          "callable": "pyod.models.hdbscan.HDBSCAN",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "autoencoder": [
-        {
-          "callable": "pyod.models.auto_encoder.AutoEncoder",
+          "class": "pyod.models.hdbscan.HDBSCAN",
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ],
       "ocsvm": [
         {
-          "callable": "pyod.models.ocsvm.OCSVM",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ]
-    }
-  },
-  "tfidf_svd": {
-    "features": {
-      "URL": {
-        "sklearn.feature_extraction.text.TfidfVectorizer": {
-          "params": {
-            "token_pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{4,12}\\b",
-            "lowercase": false
-          },
-          "grid": {
-            "max_features": [300, 600, 1000],
-            "min_df": [2, 10],
-            "max_df": [0.3, 0.5]
-          }
-        },
-        "pipeline.transformers.wrappers.TruncatedSVDWrapper": {
-          "grid": { "n_components": [10, 50, 100] }
-        }
-      }
-    },
-    "estimators": {
-      "isolation_forest": [{
-        "callable": "pyod.models.iforest.IForest",
-        "grid": { "n_estimators": [50, 100],
-        "contamination": [0.1, 0.2, 0.3] }
-      }],
-      "lof": [
-        {
-          "callable": "pyod.models.lof.LOF",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "hdbscan": [
-        {
-          "callable": "pyod.models.hdbscan.HDBSCAN",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "autoencoder": [
-        {
-          "callable": "pyod.models.auto_encoder.AutoEncoder",
-          "grid": { "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "ocsvm": [
-        {
-          "callable": "pyod.models.ocsvm.OCSVM",
+          "class": "pyod.models.ocsvm.OCSVM",
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ]
     }
   }
+  
 }

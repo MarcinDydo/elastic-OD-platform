@@ -23,18 +23,24 @@ w katalogu root projektu powinien znajdowac sie plik .env:
 CSV_PATH = "./data/csic-01.csv"
 CSV_ASSUME_MISSING = "True"
 CSV_BLOCKSIZE = "64MB"
-CSV_RESULT_PATH = "./data/csic-01-experiment3-results.csv"
-CONFIG_PATH = "./configs/config.json"
+
+PLAYBOOK = "sequence"
+TARGET_PATH = "./output/csic_experiment_anomalies.csv"
+RESULTS_PATH = "./output/csic_experiment_results.csv"
+
+CONFIG_PATH = "./configs/csic_config.json"
+CONFIG_LABELS = "class:Normal"
+LOG_LEVEL = "INFO"
+
 MALLOC_TRIM_THRESHOLD_ = "0"
 DASK_DISTRIBUTED__WORKER__MEMORY__LIMIT = "10GiB"
-LOG_LEVEL = "DEBUG"
 # DASK_DATAFRAME__BACKEND= "cudf"
 DASK_DISTRIBUTED__WORKER__MEMORY__SPILL = "0.7"
 DASK_DISTRIBUTED__WORKER__MEMORY__PAUSE = "0.9"
 DASK_DISTRIBUTED__WORKER__MEMORY__TERMINATE = "0.95"
+
 ELASTIC_IP = ""
 ELASTIC_API_KEY = ""  
-ELASTIC_QUERY_PATH = ""
 ```
 następnie można uruchomić program poleceniem:
 
