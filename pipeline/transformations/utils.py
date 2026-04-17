@@ -1,33 +1,7 @@
 import numpy as np
 import dask.array as da
 from sklearn.base import BaseEstimator, TransformerMixin
-
-
-class FillNaTransformer(BaseEstimator, TransformerMixin):
-    """Replaces NaN/None with a fill value and casts to str.
-
-    Works with both pandas Series and dask Series.
-    """
-
-    def __init__(self, fill_value=""):
-        self.fill_value = fill_value
-
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X, y=None):
-        if hasattr(X, "fillna"):  # pandas / dask dataframe/series
-            return X.fillna(self.fill_value).astype(str)
-
-        # dask bag
-        if hasattr(X, "map"):
-            return X.map(
-                lambda v: str(self.fill_value if v is None else v)
-            )
-
-        # fallback
-        return str(self.fill_value if X is None else X)
-
+from scipy.sparse import csr_matrix
 
 class WrapStringsTransformer(BaseEstimator, TransformerMixin):
     """Wraps bare string elements into single-element lists.
@@ -41,6 +15,20 @@ class WrapStringsTransformer(BaseEstimator, TransformerMixin):
             return X.map(lambda v: [v] if isinstance(v, str) else v)
         return [[v] if isinstance(v, str) else v for v in X]
 
+class DenseTransformer(TransformerMixin):
+
+    def fit(self, X, y=None, **fit_params):
+        return self
+
+    def transform(self, X, y=None, **fit_params):
+        if hasattr(X, "toarray"):
+            return X.toarray()
+        if isinstance(X, da.Array):
+            return X.map_blocks(csr_matrix.toarray, dtype="float64")
+        if hasattr(X, "todense"):
+            return X.todense()
+        return X
+        
 
 class NanToNumDaskTransformer(BaseEstimator, TransformerMixin):
     """

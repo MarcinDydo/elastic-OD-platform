@@ -18,7 +18,6 @@ from dask.distributed import Client
 from connectors.csv_connector import CSVConnector
 from processing.point_benchmark import (
     _build_summary,
-    _chunked_predict,
     _trim_memory,
     build_dags,
 )
@@ -123,20 +122,28 @@ def run(client: Client) -> Optional[Dict[str, List[Dict[str, Any]]]]:
             logger.debug("  Fitting composite feature pipe: %s", feat_desc)
             t0 = time.perf_counter()
             col_arrays = []
+            ddf.fillna(0)
             for col_name, pipe in col_pipes.items():
-                feature_arr = pipe.fit_transform(ddf[col_name].to_bag())
-                if isinstance(feature_arr, da.Array):
-                    feature_arr = feature_arr.compute()
-                elif hasattr(feature_arr, "compute"):
-                    feature_arr = feature_arr.compute()
-                if hasattr(feature_arr, "toarray"):
-                    feature_arr = feature_arr.toarray()
-                arr = np.asarray(feature_arr, dtype="float64")
-                if arr.ndim == 1:
-                    arr = arr.reshape(-1, 1)
-                col_arrays.append(arr)
+                col_series = client.persist(ddf[col_name].to_bag())
+                feat = pipe.fit_transform(col_series)
+                if not isinstance(feat, da.Array):
+                    if hasattr(feat, "to_dask_array"):
+                        feat = feat.to_dask_array(lengths=True)
+                    else:
+                        feat = da.from_array(np.asarray(feat, dtype="float64"))
+                feat = feat.persist()
+                if any(np.isnan(c) for c in feat.chunks[0]):
+                    feat.compute_chunk_sizes()
+                if feat.ndim == 1:
+                    feat = feat.reshape(-1, 1)
+                col_arrays.append(feat)
 
-            X_combined = np.hstack(col_arrays)
+            row_chunks = col_arrays[0].chunks[0]
+            col_arrays = [a.rechunk({0: row_chunks, 1: -1}) for a in col_arrays]
+            X_combined = da.concatenate(col_arrays, axis=1).compute()
+            if hasattr(X_combined, "toarray"):
+                X_combined = X_combined.toarray()
+            X_combined = np.asarray(X_combined, dtype="float64")
             del col_arrays
 
             X_seq, slices = _aggregate_features(
@@ -175,7 +182,7 @@ def run(client: Client) -> Optional[Dict[str, List[Dict[str, Any]]]]:
                 t0 = time.perf_counter()
                 search.fit(X_dask, y=Y_dask)
                 best_est = search.best_estimator_.steps[-1][1]
-                best_est.labels_ = _chunked_predict(best_est, X_dask)
+                best_est.labels_ = best_est.predict_chunked(X_dask)
                 client.run(gc.collect)
                 elapsed = time.perf_counter() - t0
                 logger.info("    Completed in %.1fs: %s", elapsed, task_name)

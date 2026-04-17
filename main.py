@@ -20,6 +20,7 @@ def _resolve_playbook():
 
 
 def main():
+    dask_config.set({"dataframe.query-planning": False})
     dask_config.refresh()
     run_playbook = _resolve_playbook()
 
@@ -30,8 +31,8 @@ def main():
         client = Client(cluster)
     else:
         cluster = LocalCluster(
-            n_workers=1,
-            threads_per_worker=2,
+            n_workers=int(os.getenv("WORKERS","1")),
+            threads_per_worker=int(os.getenv("THREADS_PER_WORKER","2")),
             memory_limit=os.getenv("DASK_DISTRIBUTED__WORKER__MEMORY__LIMIT", "12GB"),
         )
         client = cluster.get_client()

@@ -1,31 +1,23 @@
 import importlib
 import logging
 import json
+import numbers
 import os
+from collections import Counter
 from itertools import product
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+import dask
 import torch
-import dask.array as da
 from sklearn.model_selection import ParameterGrid
-from sklearn.preprocessing import FunctionTransformer
 from dask_ml.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
-from pipeline.transformations.utils import FillNaTransformer, NanToNumDaskTransformer, WrapStringsTransformer
+from pipeline.transformations.utils import (
+    DenseTransformer,
+    NanToNumDaskTransformer,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _densify_dask(X):
-    """map_blocks toarray() on dask arrays; passthrough for dense input."""
-    if isinstance(X, da.Array):
-        return X.map_blocks(
-            lambda b: b.toarray() if hasattr(b, "toarray") else b,
-            dtype="float64",
-        )
-    if hasattr(X, "toarray"):
-        return X.toarray()
-    return X
 
 
 # (name, position, factory) keyed by canonical dotted path.
@@ -33,14 +25,141 @@ def _densify_dask(X):
 # feature chain so the config can reference the native dask_ml classes.
 _AUTO_STEPS: Dict[str, List[Tuple[str, str, Any]]] = {
     "dask_ml.feature_extraction.text.CountVectorizer": [
-        ("densify", "after", lambda: FunctionTransformer(_densify_dask, validate=False)),
+        ("densify", "after", DenseTransformer()),
     ],
     "dask_ml.feature_extraction.text.HashingVectorizer": [
-        ("densify", "after", lambda: FunctionTransformer(_densify_dask, validate=False)),
+        ("densify", "after", DenseTransformer()),
     ],
     "dask_ml.decomposition.TruncatedSVD": [
-        ("nan_to_num", "before", lambda: NanToNumDaskTransformer()),
+        ("nan_to_num", "before", NanToNumDaskTransformer()),
     ],
+}
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(sorted((k, _freeze(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
+def _count_vocab_dask(series, cv_kwargs: Dict[str, Any]) -> Dict[str, int]:
+    """Global vocabulary for a dask Series, matching CountVectorizer semantics.
+    """
+    from sklearn.feature_extraction.text import CountVectorizer as SklearnCountVectorizer
+
+    analyzer_kwargs = {
+        k: v for k, v in cv_kwargs.items()
+        if k not in ("max_features", "max_df", "min_df", "vocabulary")
+    }
+    analyzer = SklearnCountVectorizer(**analyzer_kwargs).build_analyzer()
+
+    max_features = cv_kwargs.get("max_features")
+    max_df = cv_kwargs.get("max_df", 1.0)
+    min_df = cv_kwargs.get("min_df", 1)
+
+    def _partition_tfdf(part):
+        tf = Counter()
+        df = Counter()
+        n_docs = 0
+        for doc in part:
+            n_docs += 1
+            feature_counter: Dict[str, int] = {}
+            for feature in analyzer(doc):
+                if feature in feature_counter:
+                    feature_counter[feature] += 1
+                else:
+                    feature_counter[feature] = 1
+            for feat, cnt in feature_counter.items():
+                tf[feat] += cnt
+                df[feat] += 1
+        return tf, df, n_docs
+
+    col = series.fillna("").astype(str)
+    parts = col.to_delayed()
+    results = dask.compute(*[dask.delayed(_partition_tfdf)(p) for p in parts])
+
+    tf_total: Counter = Counter()
+    df_total: Counter = Counter()
+    n_docs = 0
+    for tf, df, nd in results:
+        tf_total.update(tf)
+        df_total.update(df)
+        n_docs += nd
+
+    if n_docs == 0 or not tf_total:
+        raise ValueError(
+            "empty vocabulary; perhaps the documents only contain stop words"
+        )
+
+    max_doc_count = (
+        max_df if isinstance(max_df, numbers.Integral)
+        else int(round(max_df * n_docs))
+    )
+    min_doc_count = (
+        min_df if isinstance(min_df, numbers.Integral)
+        else int(round(min_df * n_docs))
+    )
+    if max_doc_count < min_doc_count:
+        raise ValueError("max_df corresponds to fewer documents than min_df")
+
+    surviving = [
+        t for t in tf_total
+        if min_doc_count <= df_total[t] <= max_doc_count
+    ]
+    if not surviving:
+        raise ValueError(
+            "After pruning, no terms remain. Try a lower min_df or higher max_df."
+        )
+
+    if max_features is not None and len(surviving) > max_features:
+        surviving.sort(key=lambda t: (-tf_total[t], t))
+        surviving = surviving[:max_features]
+
+    surviving.sort()
+    return {t: i for i, t in enumerate(surviving)}
+
+
+def _inspect_countvectorizer(
+    col_name: str,
+    params: Dict[str, Any],
+    ddf,
+    cache: Dict[Any, Dict[str, int]],
+) -> Dict[str, Any]:
+    """Inject a global vocabulary into CountVectorizer params when max_features is set."""
+    max_features = params.get("max_features")
+    if max_features is None:
+        return params
+    if "vocabulary" in params and params["vocabulary"] is not None:
+        return params
+    if ddf is None:
+        logger.debug(
+            "CountVectorizer inspector: ddf unavailable for %r, skipping vocab precomputation",
+            col_name,
+        )
+        return params
+
+    cv_kwargs = {k: v for k, v in params.items() if k != "vocabulary"}
+    cache_key = (col_name, _freeze(cv_kwargs))
+    if cache_key in cache:
+        vocab = cache[cache_key]
+    else:
+        logger.info(
+            "Precomputing CountVectorizer vocabulary for %r (max_features=%s)",
+            col_name, max_features,
+        )
+        vocab = _count_vocab_dask(ddf[col_name], cv_kwargs)
+        cache[cache_key] = vocab
+        logger.debug("Vocabulary for %r: %d tokens", col_name, len(vocab))
+
+    new_params = dict(params)
+    new_params["vocabulary"] = vocab
+    return new_params
+
+
+_PARAM_INSPECTORS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "dask_ml.feature_extraction.text.CountVectorizer": _inspect_countvectorizer,
 }
 
 
@@ -66,7 +185,22 @@ class TransformerBuilder:
             data = json.load(fh)
         if not isinstance(data, dict):
             raise ValueError("Builder config JSON must be an object.")
+        TransformerBuilder._normalize_tuple_params(data)
         return data
+
+    _TUPLE_PARAMS = frozenset({"ngram_range"})
+
+    @staticmethod
+    def _normalize_tuple_params(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in TransformerBuilder._TUPLE_PARAMS and isinstance(value, list):
+                    node[key] = tuple(value)
+                else:
+                    TransformerBuilder._normalize_tuple_params(value)
+        elif isinstance(node, list):
+            for item in node:
+                TransformerBuilder._normalize_tuple_params(item)
 
     @staticmethod
     def _expand_grid(grid: Dict[str, list]) -> List[Dict[str, Any]]:
@@ -101,14 +235,15 @@ class TransformerBuilder:
     def _build_feature_pipes(
         self,
         features_spec: Dict[str, Dict[str, Dict]],
+        ddf=None,
     ) -> List[Tuple[str, Dict[str, Pipeline]]]:
         # Phase 1: build per-column variant lists
         per_column: Dict[str, List[Tuple[str, Pipeline]]] = {}
+        vocab_cache: Dict[Any, Dict[str, int]] = {}
 
         for col_name, callables_dict in features_spec.items():
             chain_items = list(callables_dict.items())
-            # Start with FillNa as the first step
-            combos: List[Tuple[List[str], List[tuple]]] = [([], [("fillna", FillNaTransformer())])]
+            combos: List[Tuple[List[str], List[tuple]]] = [([], [])]
 
             for callable_path, call_spec in chain_items:
                 static_params = dict(call_spec.get("params", {}))
@@ -124,10 +259,14 @@ class TransformerBuilder:
                         a_name, a_pos, step_name,
                     )
 
+                inspector = _PARAM_INSPECTORS.get(callable_path)
+
                 new_combos = []
                 for desc_parts, steps_so_far in combos:
                     for grid_params in grid_combos:
                         merged = {**static_params, **grid_params}
+                        if inspector is not None:
+                            merged = inspector(col_name, merged, ddf, vocab_cache)
                         tag = ""
                         if grid_params:
                             tag = "_".join([f"{k}={v}" for k, v in sorted(grid_params.items())])
@@ -135,13 +274,13 @@ class TransformerBuilder:
                         instance = cls(**merged)
                         step_label = f"{step_name}_{len(steps_so_far)}"
                         chain = list(steps_so_far)
-                        for a_name, a_pos, a_factory in auto_steps:
+                        for a_name, a_pos, a_cls in auto_steps:
                             if a_pos == "before":
-                                chain.append((f"{a_name}_{len(chain)}", a_factory()))
+                                chain.append((f"{a_name}_{len(chain)}", a_cls))
                         chain.append((step_label, instance))
-                        for a_name, a_pos, a_factory in auto_steps:
+                        for a_name, a_pos, a_cls in auto_steps:
                             if a_pos == "after":
-                                chain.append((f"{a_name}_{len(chain)}", a_factory()))
+                                chain.append((f"{a_name}_{len(chain)}", a_cls))
                         new_combos.append((desc, chain))
 
                 combos = new_combos
@@ -243,11 +382,12 @@ class TransformerBuilder:
         name: str,
         spec: Dict[str, Any],
         scoring_fn,
+        ddf=None,
     ) -> Dict[str, Any]:
         features_spec = spec.get("features", {})
         estimators_spec = spec.get("estimators", {})
 
-        feature_pipes = self._build_feature_pipes(features_spec)
+        feature_pipes = self._build_feature_pipes(features_spec, ddf=ddf)
         pipelines, searches = self._build_estimator_objects(estimators_spec, scoring_fn)
 
         total = len(feature_pipes) * (len(pipelines) + len(searches))
@@ -271,9 +411,10 @@ class TransformerBuilder:
     def build_all(
         self,
         scoring_fn=None,
+        ddf=None,
     ) -> Dict[str, Dict[str, Any]]:
         strategies: Dict[str, Dict[str, Any]] = {}
         for name, spec in self.config.items():
             logger.debug("Building pipelines for strategy: %s", name)
-            strategies[name] = self.build_transformations(name, spec, scoring_fn)
+            strategies[name] = self.build_transformations(name, spec, scoring_fn, ddf=ddf)
         return strategies

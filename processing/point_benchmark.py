@@ -27,13 +27,13 @@ from pipeline.builder import TransformerBuilder
 from pipeline.transformations.wrappers import (
     AutoencoderWrapper,
     HDBSCAN,
-    TfidfVectorizerWrapper,
+    TfidfTransformerWrapper,
 )
 
 logger = logging.getLogger(__name__)
 
 OVERRIDES: Dict[str, type] = {
-    "sklearn.feature_extraction.text.TfidfVectorizer": TfidfVectorizerWrapper,
+    "sklearn.feature_extraction.text.TfidfVectorizer": TfidfTransformerWrapper,
     "pipeline.transformers.wrappers.AutoencoderWrapper": AutoencoderWrapper,
     "pyod.models.hdbscan.HDBSCAN": HDBSCAN,
 }
@@ -50,23 +50,6 @@ SCORING = make_scorer(_anomaly_recall)
 def _trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
-
-def _chunked_predict(estimator, X_dask):
-    """Predict block-by-block when X_dask has multiple partitions."""
-    if X_dask.numblocks[0] <= 1:
-        arr = X_dask.compute()
-        if hasattr(arr, "toarray"):
-            arr = arr.toarray()
-        return estimator.predict(np.asarray(arr, dtype="float64"))
-
-    predictions = []
-    for i in range(X_dask.numblocks[0]):
-        block = X_dask.blocks[i].compute()
-        if hasattr(block, "toarray"):
-            block = block.toarray()
-        predictions.append(estimator.predict(np.asarray(block, dtype="float64")))
-
-    return np.concatenate(predictions)
 
 def _build_summary(
     task_name: str,
@@ -155,7 +138,7 @@ def build_dags() -> Tuple[Any, Dict[str, Dict], Dict[str, Any]]:
 
     connector = CSVConnector()
     ddf = connector.load(usecols=csv_columns)
-    jobs = builder.build_all(scoring_fn=SCORING)
+    jobs = builder.build_all(scoring_fn=SCORING, ddf=ddf)
 
     total_tasks = sum(
         len(j["feature_pipes"]) * (len(j["pipelines"]) + len(j["searches"]))
@@ -226,22 +209,26 @@ def run(
             t0 = time.perf_counter()
             col_arrays = []
             for col_name, pipe in col_pipes.items():
-                feature_arr = pipe.fit_transform(ddf[col_name].to_bag())
-                if isinstance(feature_arr, da.Array):
-                    feature_arr = feature_arr.compute()
-                elif hasattr(feature_arr, "compute"):
-                    feature_arr = feature_arr.compute()
-                if hasattr(feature_arr, "toarray"):
-                    feature_arr = feature_arr.toarray()
-                arr = np.asarray(feature_arr, dtype="float64")
-                if arr.ndim == 1:
-                    arr = arr.reshape(-1, 1)
-                col_arrays.append(arr)
+                ddf.fillna(0)
+                col_series = client.persist(ddf[col_name].to_bag())
+                feat = pipe.fit_transform(col_series)
+                print(feat)
+                if not isinstance(feat, da.Array):
+                    if hasattr(feat, "to_dask_array"):
+                        feat = feat.to_dask_array(lengths=True)
+                    else:
+                        feat = da.from_array(np.asarray(feat, dtype="float64"))
+                feat = feat.persist()
+                if any(np.isnan(c) for c in feat.chunks[0]):
+                    feat.compute_chunk_sizes()
+                if feat.ndim == 1:
+                    feat = feat.reshape(-1, 1)
+                col_arrays.append(feat)
 
-            # Concatenate all columns horizontally
-            X_combined = np.hstack(col_arrays)
-            X_dask = client.persist(da.from_array(X_combined, chunks="64MB"))
-            del col_arrays, X_combined
+            row_chunks = col_arrays[0].chunks[0]
+            col_arrays = [a.rechunk({0: row_chunks, 1: -1}) for a in col_arrays]
+            X_dask = client.persist(da.concatenate(col_arrays, axis=1))
+            del col_arrays
             elapsed = time.perf_counter() - t0
             logger.info(
                 "  Composite feature '%s' computed in %.1fs  shape=%s",
@@ -262,7 +249,7 @@ def run(
                 t0 = time.perf_counter()
                 search.fit(X_dask, y=Y_dask) #Find best (seach is dask compatible)
                 best_est = search.best_estimator_.steps[-1][1]
-                best_est.labels_ = _chunked_predict(best_est, X_dask)
+                best_est.labels_ = best_est.predict_chunked(X_dask)
                 client.run(gc.collect)
                 elapsed = time.perf_counter() - t0
                 logger.info("    Completed in %.1fs: %s", elapsed, task_name)

@@ -1,19 +1,19 @@
 # Python version: 3.12
 
-# Core distributed computing
-dask[complete]==2024.12.0
+# Core distributed computing may need to add [complete] for cuda
+dask==2025.1.0
 
 # Data processing
 pandas==2.3.3
 numpy==1.26.4
 
 # Machine Learning
-scikit-learn==1.4.0
+scikit-learn>=1.6.1
 matplotlib==3.8.2
-dask-ml==2024.4.4
-dask-cuda>=24.12.0
+dask-ml==2025.1.0
+# dask-cuda>=24.12.0
 # Outlier Detection
-pyod==2.0.7
+pyod==3.2.1
 pythresh==0.3.6
 
 # Deep Learning

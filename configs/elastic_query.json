@@ -1,0 +1,37 @@
+{
+  "_source": [
+    "dns.query.name",
+    "dns.answers.name",
+    "dns.query.class_name",
+    "client.ip",
+    "server.ip",
+    "dns.response.code_name",
+    "dns.subdomain",
+    "dns.truncated",
+    "dns.highest_registered_domain",
+    "destination_geo.organization_name",
+    "destination_geo.ip",
+    "destination.geo.country_name",
+    "destination.geo.timezone",
+    "destination.geo.country_iso_code"
+  ],
+  "query": {
+    "bool": {
+      "filter": [
+        {
+          "term": {
+            "container.id": "dns.log"
+          }
+        },
+        {
+          "range": {
+            "@timestamp": {
+              "gte": "now-24h",
+              "lte": "now"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

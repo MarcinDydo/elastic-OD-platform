@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 import re
 from collections import Counter
 from contextlib import contextmanager
@@ -9,7 +8,7 @@ import numpy as np
 from joblib import parallel_backend
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction import FeatureHasher as _SklearnFeatureHasher
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
 from sklearn.neighbors import NearestNeighbors
 from sklearn.utils.validation import check_array, check_is_fitted
 import dask.array as da
@@ -37,107 +36,98 @@ def _dask_joblib():
 
 
 def _gpu_backend() -> bool:
-    return os.getenv("DASK_DATAFRAME__BACKEND") == "cudf"
+    """True when the active dask client runs on a CUDA cluster."""
+    try:
+        from dask.distributed import get_client
+        client = get_client()
+    except (ImportError, ValueError):
+        return False
+    cluster_cls = type(client.cluster).__name__ if client.cluster is not None else ""
+    if "CUDA" in cluster_cls:
+        return True
+    try:
+        info = client.scheduler_info()
+        for w in info.get("workers", {}).values():
+            if w.get("resources", {}).get("GPU", 0) > 0:
+                return True
+    except Exception:
+        pass
+    return False
 
 
-class TfidfVectorizerWrapper(BaseEstimator, TransformerMixin):
-    """TF-IDF transformer with dual CPU/GPU backend.
+class TfidfTransformerWrapper(BaseEstimator, TransformerMixin):
+    """IDF re-weighting for a pre-computed count matrix.
 
-    GPU path (DASK_DATAFRAME__BACKEND=cudf): dask_ml CountVectorizer produces
-    a sparse dask matrix, then cuml.dask TfidfTransformer weighs it across
-    workers.  CPU path delegates to sklearn's TfidfVectorizer under the dask
-    joblib backend so tokenization parallelises on the cluster.
+    Expects input produced by ``dask_ml.feature_extraction.text.CountVectorizer``
+    (declared as a separate step in the feature pipeline).  GPU path
+    (DASK_DATAFRAME__BACKEND=cudf) delegates to ``cuml.dask`` TfidfTransformer
+    so IDF fitting and weighting stay on workers; CPU path fits sklearn's
+    ``TfidfTransformer`` once, then applies it per-block via ``map_blocks``
+    under the dask joblib backend so transform parallelism is preserved.
     """
 
-    def __init__(
-        self,
-        token_pattern=None,
-        lowercase=True,
-        max_features=None,
-        analyzer="word",
-        ngram_range=(1, 1),
-        min_df=1,
-        max_df=1.0,
-        norm="l2",
-        use_idf=True,
-        smooth_idf=True,
-        sublinear_tf=False,
-    ):
-        self.token_pattern = token_pattern
-        self.lowercase = lowercase
-        self.max_features = max_features
-        self.analyzer = analyzer
-        self.ngram_range = ngram_range
-        self.min_df = min_df
-        self.max_df = max_df
+    def __init__(self, norm="l2", use_idf=True, smooth_idf=True, sublinear_tf=False):
         self.norm = norm
         self.use_idf = use_idf
         self.smooth_idf = smooth_idf
         self.sublinear_tf = sublinear_tf
 
-    def _count_kwargs(self):
-        kwargs = {
-            "lowercase": self.lowercase,
-            "analyzer": self.analyzer,
-            "ngram_range": tuple(self.ngram_range),
-            "min_df": self.min_df,
-            "max_df": self.max_df,
-            "max_features": self.max_features,
-        }
-        if self.token_pattern is not None:
-            kwargs["token_pattern"] = self.token_pattern
-        return kwargs
-
-    @staticmethod
-    def _ensure_concrete(X):
-        if hasattr(X, "compute"):
-            return X.compute()
-        return X
-
-    def _fit_gpu(self, X):
-        from dask_ml.feature_extraction.text import CountVectorizer as DaskCountVectorizer
-        from cuml.dask.feature_extraction.text import TfidfTransformer as CumlTfidfTransformer
-
-        self._count_ = DaskCountVectorizer(**self._count_kwargs())
-        counts = self._count_.fit_transform(X)
-        self._tfidf_ = CumlTfidfTransformer()
-        return self._tfidf_.fit_transform(counts)
-
-    def _transform_gpu(self, X):
-        counts = self._count_.transform(X)
-        return self._tfidf_.transform(counts)
-
-    def _fit_cpu(self, X):
-        kwargs = self._count_kwargs()
-        kwargs.update({
-            "norm": self.norm,
+    def _sk_kwargs(self):
+        norm = self.norm
+        if isinstance(norm, str) and norm.lower() == "none":
+            norm = None
+        return {
+            "norm": norm,
             "use_idf": self.use_idf,
             "smooth_idf": self.smooth_idf,
             "sublinear_tf": self.sublinear_tf,
-        })
-        self._sk_ = TfidfVectorizer(**kwargs)
-        with _dask_joblib():
-            return self._sk_.fit_transform(self._ensure_concrete(X))
+        }
 
-    def _transform_cpu(self, X):
-        with _dask_joblib():
-            return self._sk_.transform(self._ensure_concrete(X))
-
-    def fit(self, X, y=None):
-        if _gpu_backend():
-            self._fit_gpu(X)
-        else:
-            self._fit_cpu(X)
+    def _fit_gpu(self, X):
+        from cuml.dask.feature_extraction.text import TfidfTransformer as CumlTfidfTransformer
+        self._impl_ = CumlTfidfTransformer()
+        self._impl_.fit(X)
         return self
 
-    def fit_transform(self, X, y=None):
+    def _fit_cpu(self, X):
+        self._impl_ = TfidfTransformer(**self._sk_kwargs())
+        if isinstance(X, da.Array):
+            X_concrete = X.compute()
+        elif hasattr(X, "compute"):
+            X_concrete = X.compute()
+        else:
+            X_concrete = X
+        with _dask_joblib():
+            self._impl_.fit(X_concrete)
+        return self
+
+    def _transform_cpu(self, X):
+        impl = self._impl_
+
+        def _block(b):
+            out = impl.transform(b)
+            return out.toarray() if hasattr(out, "toarray") else np.asarray(out)
+
+        if isinstance(X, da.Array):
+            with _dask_joblib():
+                return X.map_blocks(_block, dtype="float64")
+        with _dask_joblib():
+            return _block(X)
+
+    def fit(self, X, y=None):
         return self._fit_gpu(X) if _gpu_backend() else self._fit_cpu(X)
 
     def transform(self, X):
-        return self._transform_gpu(X) if _gpu_backend() else self._transform_cpu(X)
+        if _gpu_backend():
+            return self._impl_.transform(X)
+        return self._transform_cpu(X)
+
+    def fit_transform(self, X, y=None):
+        self.fit(X)
+        return self.transform(X)
 
 
-    
+
 class AutoencoderWrapper(BaseEstimator, TransformerMixin):
     """Autoencoder-based dimensionality reduction (feature transformer).
 
@@ -236,43 +226,51 @@ class RatiosWrapper(BaseEstimator, TransformerMixin):
     def __init__(self, lowercase=False):
         self.lowercase = lowercase
 
+    _COLUMNS = ("alnum", "special", "illegal", "encoded", "entropy")
+
     def fit(self, X, y=None):
         return self
 
-    def transform(self, X, y=None):
-        if hasattr(X, "compute"):
-            X = X.compute()
-
-        illegal = self._ILLEGAL_CHARS
-        encoded_pat = self._ENCODED_RE
-
+    @classmethod
+    def _rows_for_series(cls, series: pd.Series, lowercase: bool) -> np.ndarray:
+        illegal = cls._ILLEGAL_CHARS
+        encoded_pat = cls._ENCODED_RE
         rows = []
-        for text in pd.Series(X).fillna("").astype(str):
-            s = text.lower() if self.lowercase else text
+        for text in series.fillna("").astype(str):
+            s = text.lower() if lowercase else text
             n = len(s)
             if n == 0:
                 rows.append([0.0, 0.0, 0.0, 0.0, 0.0])
                 continue
-
             alnum = sum(1 for c in s if c.isalnum())
             special = sum(1 for c in s if not c.isalnum() and not c.isspace())
             illegal_count = sum(1 for c in s if c in illegal)
             encoded = len(encoded_pat.findall(s)) * 3
-
             freq = Counter(s)
             entropy = -sum(
                 (cnt / n) * math.log2(cnt / n) for cnt in freq.values()
             )
-
             rows.append([
-                alnum / n,
-                special / n,
-                illegal_count / n,
-                encoded / n,
-                entropy,
+                alnum / n, special / n, illegal_count / n, encoded / n, entropy,
             ])
-
         return np.array(rows, dtype="float64")
+
+    def transform(self, X, y=None):
+        if isinstance(X, dd.Series):
+            cols = self._COLUMNS
+            lowercase = self.lowercase
+            meta = pd.DataFrame({c: pd.Series([], dtype="float64") for c in cols})
+            def _part(s):
+                return pd.DataFrame(
+                    self._rows_for_series(s, lowercase),
+                    columns=cols, index=s.index,
+                )
+            with _dask_joblib():
+                result_dd = X.map_partitions(_part, meta=meta)
+                return result_dd.to_dask_array(lengths=True)
+        if hasattr(X, "compute"):
+            X = X.compute()
+        return self._rows_for_series(pd.Series(X), self.lowercase)
 
 
 class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
@@ -293,24 +291,38 @@ class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
         self._pat = re.compile(self.pattern)
         return self
 
-    def transform(self, X, y=None):
-        check_is_fitted(self, ["ft_model_"])
-        if hasattr(X, "compute"):
-            X = X.compute()
-
-        wv = self.ft_model_.wv
-        dim = wv.vector_size
-        pat = self._pat
+    @staticmethod
+    def _rows_for_series(series: pd.Series, wv, pat, dim: int) -> np.ndarray:
         rows = []
-        for text in pd.Series(X).fillna("").astype(str):
+        for text in series.fillna("").astype(str):
             tokens = pat.findall(text)
             if not tokens:
                 rows.append(np.zeros(dim, dtype="float64"))
                 continue
             vecs = np.array([wv[t] for t in tokens])
             rows.append(vecs.mean(axis=0))
-
         return np.array(rows, dtype="float64")
+
+    def transform(self, X, y=None):
+        check_is_fitted(self, ["ft_model_"])
+        wv = self.ft_model_.wv
+        dim = wv.vector_size
+        pat = self._pat
+
+        if isinstance(X, dd.Series):
+            cols = [f"v{i}" for i in range(dim)]
+            meta = pd.DataFrame({c: pd.Series([], dtype="float64") for c in cols})
+            def _part(s):
+                return pd.DataFrame(
+                    self._rows_for_series(s, wv, pat, dim),
+                    columns=cols, index=s.index,
+                )
+            with _dask_joblib():
+                result_dd = X.map_partitions(_part, meta=meta)
+                return result_dd.to_dask_array(lengths=True)
+        if hasattr(X, "compute"):
+            X = X.compute()
+        return self._rows_for_series(pd.Series(X), wv, pat, dim)
 
 
 class PyODDetectorWrapper(BaseEstimator):
@@ -377,6 +389,18 @@ class PyODDetectorWrapper(BaseEstimator):
         with _dask_joblib():
             raw = self._model.predict(arr)
         return np.where(raw == 1, -1, 1)
+
+    def predict_chunked(self, X):
+        """Predict block-by-block on a dask array; delegate to predict otherwise."""
+        if not isinstance(X, da.Array) or X.numblocks[0] <= 1:
+            return self.predict(X)
+        preds = []
+        for i in range(X.numblocks[0]):
+            block = X.blocks[i].compute()
+            if hasattr(block, "toarray"):
+                block = block.toarray()
+            preds.append(self.predict(np.asarray(block, dtype="float64")))
+        return np.concatenate(preds)
 
     def fit_predict(self, X, y=None):
         self.fit(X, y)
