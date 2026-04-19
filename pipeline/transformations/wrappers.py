@@ -59,11 +59,6 @@ class TfidfTransformerWrapper(BaseEstimator, TransformerMixin):
     """IDF re-weighting for a pre-computed count matrix.
 
     Expects input produced by ``dask_ml.feature_extraction.text.CountVectorizer``
-    (declared as a separate step in the feature pipeline).  GPU path
-    (DASK_DATAFRAME__BACKEND=cudf) delegates to ``cuml.dask`` TfidfTransformer
-    so IDF fitting and weighting stay on workers; CPU path fits sklearn's
-    ``TfidfTransformer`` once, then applies it per-block via ``map_blocks``
-    under the dask joblib backend so transform parallelism is preserved.
     """
 
     def __init__(self, norm="l2", use_idf=True, smooth_idf=True, sublinear_tf=False):
@@ -110,7 +105,7 @@ class TfidfTransformerWrapper(BaseEstimator, TransformerMixin):
 
         if isinstance(X, da.Array):
             with _dask_joblib():
-                return X.map_blocks(_block, dtype="float64")
+                return X.map_blocks(_block, dtype="float32")
         with _dask_joblib():
             return _block(X)
 
@@ -132,11 +127,8 @@ class AutoencoderWrapper(BaseEstimator, TransformerMixin):
     """Autoencoder-based dimensionality reduction (feature transformer).
 
     Builds a symmetric encoder-decoder from ``hidden_neurons`` and trains
-    on reconstruction loss.  After fit the encoder output (last layer of
-    ``hidden_neurons``) is used as the reduced representation.
-
-    Config example::
-        "params": {"hidden_neurons": [1000, 500, 50], "epochs": 100}
+    on reconstruction loss.
+    
     """
 
     def __init__(self, hidden_neurons=None, epochs=20, lr=1e-3, batch_size=256):
@@ -202,7 +194,7 @@ class AutoencoderWrapper(BaseEstimator, TransformerMixin):
         arr = self._to_numpy(X)
         with torch.no_grad():
             encoded = self.encoder_(torch.tensor(arr)).numpy()
-        return encoded.astype("float64")
+        return encoded.astype("float32")
 
     def fit_transform(self, X, y=None):
         self.fit(X, y)
@@ -212,35 +204,56 @@ class AutoencoderWrapper(BaseEstimator, TransformerMixin):
 class RatiosWrapper(BaseEstimator, TransformerMixin):
     """Computes string-analysis feature ratios for each sample.
 
-    Produces a 5-column vector per sample:
-      0 alphanumeric character ratio
-      1 special character ratio (non-alnum, non-whitespace)
-      2 illegal special character ratio (<, >, |, {, }, etc.)
-      3 URL-encoded character ratio (%XX sequences)
-      4 Shannon entropy of the character distribution
+    Produces a multi-column vector per sample with the following 8 ratios of character types
     """
 
     _ILLEGAL_CHARS = frozenset('<>|{}~^`[]')
     _ENCODED_RE = re.compile(r'%[0-9a-fA-F]{2}')
+    _VOWELS_LOWER = frozenset("aeiou")
+    _VOWELS_ALL = frozenset("aeiouAEIOU")
 
-    def __init__(self, lowercase=False):
+    _COLUMNS = (
+        "alnum", "special", "illegal", "encoded", "entropy",
+        "vowel", "consonant", "meaning",
+    )
+
+    def __init__(self, lowercase=False, meaning_dic_path="data/meaning.dic"):
         self.lowercase = lowercase
-
-    _COLUMNS = ("alnum", "special", "illegal", "encoded", "entropy")
+        self.meaning_dic_path = meaning_dic_path
 
     def fit(self, X, y=None):
+        try:
+            with open(self.meaning_dic_path, "r", encoding="utf-8") as fh:
+                words = {line.strip().lower() for line in fh}
+            words = {w for w in words if len(w) >= 2}
+            self.words_ = frozenset(words)
+            self._max_word_len_ = max((len(w) for w in words), default=0)
+        except (FileNotFoundError, OSError):
+            logger.warning(
+                "meaning.dic not found at %s; meaning ratio will be 0",
+                self.meaning_dic_path,
+            )
+            self.words_ = frozenset()
+            self._max_word_len_ = 0
         return self
 
-    @classmethod
-    def _rows_for_series(cls, series: pd.Series, lowercase: bool) -> np.ndarray:
-        illegal = cls._ILLEGAL_CHARS
-        encoded_pat = cls._ENCODED_RE
+    @staticmethod
+    def _rows_for_series(
+        series: pd.Series,
+        lowercase: bool,
+        illegal: frozenset,
+        encoded_pat,
+        vowels: frozenset,
+        words: frozenset,
+        max_word_len: int,
+    ) -> np.ndarray:
+        vowels_all = RatiosWrapper._VOWELS_ALL
         rows = []
         for text in series.fillna("").astype(str):
             s = text.lower() if lowercase else text
             n = len(s)
             if n == 0:
-                rows.append([0.0, 0.0, 0.0, 0.0, 0.0])
+                rows.append([0.0] * 8)
                 continue
             alnum = sum(1 for c in s if c.isalnum())
             special = sum(1 for c in s if not c.isalnum() and not c.isspace())
@@ -250,19 +263,54 @@ class RatiosWrapper(BaseEstimator, TransformerMixin):
             entropy = -sum(
                 (cnt / n) * math.log2(cnt / n) for cnt in freq.values()
             )
+            vowel_count = sum(1 for c in s if c in vowels)
+            consonant_count = sum(
+                1 for c in s if c.isalpha() and c not in vowels_all
+            )
+
+            meaning_ratio = 0.0
+            if words and max_word_len >= 2:
+                s_lower = s if lowercase else s.lower()
+                i = 0
+                matched = 0
+                while i < n:
+                    max_try = min(max_word_len, n - i)
+                    found = 0
+                    for L in range(max_try, 1, -1):
+                        if s_lower[i:i + L] in words:
+                            found = L
+                            break
+                    if found:
+                        matched += found
+                        i += found
+                    else:
+                        i += 1
+                meaning_ratio = matched / n
+
             rows.append([
                 alnum / n, special / n, illegal_count / n, encoded / n, entropy,
+                vowel_count / n, consonant_count / n, meaning_ratio,
             ])
-        return np.array(rows, dtype="float64")
+        return np.array(rows, dtype="float32")
 
     def transform(self, X, y=None):
+        check_is_fitted(self, ["words_"])
+        illegal = self._ILLEGAL_CHARS
+        encoded_pat = self._ENCODED_RE
+        vowels = self._VOWELS_LOWER if self.lowercase else self._VOWELS_ALL
+        words = self.words_
+        max_word_len = self._max_word_len_
+        lowercase = self.lowercase
+
         if isinstance(X, dd.Series):
             cols = self._COLUMNS
-            lowercase = self.lowercase
-            meta = pd.DataFrame({c: pd.Series([], dtype="float64") for c in cols})
+            meta = pd.DataFrame({c: pd.Series([], dtype="float32") for c in cols})
             def _part(s):
                 return pd.DataFrame(
-                    self._rows_for_series(s, lowercase),
+                    RatiosWrapper._rows_for_series(
+                        s, lowercase, illegal, encoded_pat,
+                        vowels, words, max_word_len,
+                    ),
                     columns=cols, index=s.index,
                 )
             with _dask_joblib():
@@ -270,7 +318,10 @@ class RatiosWrapper(BaseEstimator, TransformerMixin):
                 return result_dd.to_dask_array(lengths=True)
         if hasattr(X, "compute"):
             X = X.compute()
-        return self._rows_for_series(pd.Series(X), self.lowercase)
+        return self._rows_for_series(
+            pd.Series(X), lowercase, illegal, encoded_pat,
+            vowels, words, max_word_len,
+        )
 
 
 class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
@@ -297,11 +348,11 @@ class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
         for text in series.fillna("").astype(str):
             tokens = pat.findall(text)
             if not tokens:
-                rows.append(np.zeros(dim, dtype="float64"))
+                rows.append(np.zeros(dim, dtype="float32"))
                 continue
             vecs = np.array([wv[t] for t in tokens])
             rows.append(vecs.mean(axis=0))
-        return np.array(rows, dtype="float64")
+        return np.array(rows, dtype="float32")
 
     def transform(self, X, y=None):
         check_is_fitted(self, ["ft_model_"])
@@ -311,7 +362,7 @@ class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
 
         if isinstance(X, dd.Series):
             cols = [f"v{i}" for i in range(dim)]
-            meta = pd.DataFrame({c: pd.Series([], dtype="float64") for c in cols})
+            meta = pd.DataFrame({c: pd.Series([], dtype="float32") for c in cols})
             def _part(s):
                 return pd.DataFrame(
                     self._rows_for_series(s, wv, pat, dim),
@@ -328,11 +379,7 @@ class DocumentPoolWrapper(BaseEstimator, TransformerMixin):
 class PyODDetectorWrapper(BaseEstimator):
     """Generic wrapper for any PyOD BaseDetector subclass.
 
-    Bridges PyOD to the sklearn Pipeline/GridSearchCV interface:
-    - Materializes dask arrays to numpy (block-by-block to limit peak memory)
-    - Converts PyOD labels (0=inlier, 1=outlier) to sklearn convention (1=inlier, -1=outlier)
-    - Exposes labels_ and decision_scores_ after fit
-    - PyThresh objects in contamination 
+    Bridges PyOD to the sklearn Pipeline/GridSearchCV interface
     """
 
     def __init__(self, pyod_class=None, **kwargs):
@@ -362,14 +409,14 @@ class PyODDetectorWrapper(BaseEstimator):
                 block = X.blocks[i].compute()
                 if hasattr(block, "toarray"):
                     block = block.toarray()
-                chunks.append(np.asarray(block, dtype="float64"))
+                chunks.append(np.asarray(block, dtype="float32"))
             arr = np.vstack(chunks) if len(chunks) > 1 else chunks[0]
         elif hasattr(X, "compute"):
-            arr = np.asarray(X.compute(), dtype="float64")
+            arr = np.asarray(X.compute(), dtype="float32")
         elif hasattr(X, "toarray"):
-            arr = np.asarray(X.toarray(), dtype="float64")
+            arr = np.asarray(X.toarray(), dtype="float32")
         else:
-            arr = np.asarray(X, dtype="float64")
+            arr = np.asarray(X, dtype="float32")
         return np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _build_model(self):
@@ -399,7 +446,7 @@ class PyODDetectorWrapper(BaseEstimator):
             block = X.blocks[i].compute()
             if hasattr(block, "toarray"):
                 block = block.toarray()
-            preds.append(self.predict(np.asarray(block, dtype="float64")))
+            preds.append(self.predict(np.asarray(block, dtype="float32")))
         return np.concatenate(preds)
 
     def fit_predict(self, X, y=None):

@@ -24,7 +24,7 @@ class DenseTransformer(TransformerMixin):
         if hasattr(X, "toarray"):
             return X.toarray()
         if isinstance(X, da.Array):
-            return X.map_blocks(csr_matrix.toarray, dtype="float64")
+            return X.map_blocks(csr_matrix.toarray, dtype="float32")
         if hasattr(X, "todense"):
             return X.todense()
         return X
@@ -47,5 +47,5 @@ class NanToNumDaskTransformer(BaseEstimator, TransformerMixin):
                 result = result.persist()
                 result.compute_chunk_sizes()
             return result
-        arr = np.nan_to_num(np.asarray(X, dtype="float64"), nan=0.0, posinf=0.0, neginf=0.0)
+        arr = np.nan_to_num(np.asarray(X, dtype="float32"), nan=0.0, posinf=0.0, neginf=0.0)
         return da.from_array(arr, chunks=arr.shape)

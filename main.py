@@ -10,19 +10,25 @@ from dask.distributed import Client, LocalCluster
 logger = logging.getLogger(__name__)
 
 
-def _resolve_playbook():
+def _resolve_playbook_cls():
     name = os.getenv("PLAYBOOK", "point").lower()
-    if name == "sequence":
-        from processing.sequence_benchmark import run
-    else:
-        from processing.point_benchmark import run
-    return run
+    from processing.point_benchmark import PointBenchmark
+    from processing.sequence_benchmark import SequenceBenchmark
+    from processing.point_playbook import PointPlaybook
+    from processing.sequence_playbook import SequencePlaybook
+    return {
+        "point": PointBenchmark,
+        "sequence": SequenceBenchmark,
+        "elastic_point": PointPlaybook,
+        "elastic_sequence": SequencePlaybook,
+    }.get(name, PointBenchmark)
 
 
 def main():
     dask_config.set({"dataframe.query-planning": False})
+    dask_config.set({"distributed.dashboard.bokeh-application.session_token_expiration": 86400000})
     dask_config.refresh()
-    run_playbook = _resolve_playbook()
+    playbook_cls = _resolve_playbook_cls()
 
     if os.getenv("DASK_DATAFRAME__BACKEND") == "cudf":
         from dask_cuda import LocalCUDACluster
@@ -40,7 +46,7 @@ def main():
     logger.info("Dask cluster ready: %s", client.dashboard_link)
     sleep(10)  # Allow time for dashboard to initialize
     try:
-        run_playbook(client=client)
+        playbook_cls().run(client=client)
     finally:
         client.close()
         cluster.close()

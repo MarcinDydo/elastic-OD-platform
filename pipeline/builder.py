@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import dask
 import torch
+from sklearn.base import clone
 from sklearn.model_selection import ParameterGrid
 from dask_ml.model_selection import GridSearchCV
 from sklearn.pipeline import Pipeline
@@ -315,8 +316,9 @@ class TransformerBuilder:
         self,
         estimators_spec: Dict[str, List[Dict]],
         scoring_fn,
-    ) -> Tuple[List[Tuple[str, Pipeline]], List[Tuple[str, GridSearchCV]]]:
-        pipelines: List[Tuple[str, Pipeline]] = []
+        expand_grids: bool = False,
+    ) -> Tuple[List[Tuple[str, Pipeline, str]], List[Tuple[str, GridSearchCV]]]:
+        pipelines: List[Tuple[str, Pipeline, str]] = []
         searches: List[Tuple[str, GridSearchCV]] = []
 
         for est_name, steps_list in estimators_spec.items():
@@ -355,19 +357,31 @@ class TransformerBuilder:
             pipe = Pipeline(pipeline_steps)
 
             if has_grid:
-                search = GridSearchCV(
-                    pipe,
-                    param_grid,
-                    scoring=scoring_fn,
-                    refit=True,
-                )
-                desc = f"{est_name}__grid"
-                logger.debug("GridSearchCV: %s  grid=%s", desc, param_grid)
-                searches.append((desc, search))
+                if expand_grids:
+                    for combo in ParameterGrid(param_grid):
+                        cloned = clone(pipe)
+                        cloned.set_params(**combo)
+                        tag = "_".join(
+                            f"{k.split('__')[-1]}={v}"
+                            for k, v in sorted(combo.items())
+                        )
+                        desc = f"{est_name}__{tag}" if tag else est_name
+                        logger.debug("Pipeline (expanded): %s", desc)
+                        pipelines.append((desc, cloned, est_name))
+                else:
+                    search = GridSearchCV(
+                        pipe,
+                        param_grid,
+                        scoring=scoring_fn,
+                        refit=True,
+                    )
+                    desc = f"{est_name}__grid"
+                    logger.debug("GridSearchCV: %s  grid=%s", desc, param_grid)
+                    searches.append((desc, search))
             else:
                 desc = est_name
                 logger.debug("Pipeline: %s", desc)
-                pipelines.append((desc, pipe))
+                pipelines.append((desc, pipe, est_name))
 
         logger.debug(
             "Built %d pipelines and %d grid searches.",
@@ -383,12 +397,15 @@ class TransformerBuilder:
         spec: Dict[str, Any],
         scoring_fn,
         ddf=None,
+        expand_grids: bool = False,
     ) -> Dict[str, Any]:
         features_spec = spec.get("features", {})
         estimators_spec = spec.get("estimators", {})
 
         feature_pipes = self._build_feature_pipes(features_spec, ddf=ddf)
-        pipelines, searches = self._build_estimator_objects(estimators_spec, scoring_fn)
+        pipelines, searches = self._build_estimator_objects(
+            estimators_spec, scoring_fn, expand_grids=expand_grids,
+        )
 
         total = len(feature_pipes) * (len(pipelines) + len(searches))
         logger.info(
@@ -401,20 +418,24 @@ class TransformerBuilder:
             "searches": searches,
         }
 
-    def required_columns(self,y_name="class") -> List[str]:
+    def required_columns(self, y_name: Optional[str] = "class") -> List[str]:
         cols: set = set()
         for spec in self.config.values():
             cols.update(spec.get("features", {}).keys())
-        cols.add(y_name)
+        if y_name:
+            cols.add(y_name)
         return sorted(cols)
 
     def build_all(
         self,
         scoring_fn=None,
         ddf=None,
+        expand_grids: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         strategies: Dict[str, Dict[str, Any]] = {}
         for name, spec in self.config.items():
             logger.debug("Building pipelines for strategy: %s", name)
-            strategies[name] = self.build_transformations(name, spec, scoring_fn, ddf=ddf)
+            strategies[name] = self.build_transformations(
+                name, spec, scoring_fn, ddf=ddf, expand_grids=expand_grids,
+            )
         return strategies

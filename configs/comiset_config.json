@@ -1,0 +1,108 @@
+{
+  "tfidf_word": {
+    "features": {
+      "_source.process_path": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
+            "lowercase": false,
+            "max_features": 500,
+            "max_df": 0.7
+          }
+        },
+        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
+          "params": {"norm": "l1"}
+        }
+      },
+      "_source.user_name": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
+            "lowercase": false,
+            "max_features": 500,
+            "max_df": 0.7
+          }
+        },
+        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
+          "params": {"norm": "l1"}
+        }
+      },
+      "_source.user_account": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
+            "lowercase": false,
+            "max_features": 500,
+            "max_df": 0.7
+          }
+        },
+        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
+          "params": {"norm": "l1"}
+        }
+      },
+      "_source.TargetObject": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
+            "lowercase": false,
+            "max_features": 500,
+            "max_df": 0.7
+          }
+        },
+        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
+          "params": {"norm": "l1"}
+        }
+      },
+      "_source.z_elastic_ecs.event.action": {
+        "dask_ml.feature_extraction.text.CountVectorizer": {
+          "params": {
+            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
+            "lowercase": false,
+            "max_features": 500,
+            "max_df": 0.7
+          }
+        },
+        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
+          "params": {"norm": "l1"}
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": {  "bootstrap": [false, true],
+        "contamination": [0.1, 0.2, 0.3] }
+      }],
+      "ECOD": [
+        {
+          "class": "pyod.models.ecod.ECOD",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "knn": [
+        {
+          "class": "pyod.models.knn.KNN",
+          "grid": { 
+            "n_neighbors": [5, 10],
+            "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "lof": [
+        {
+          "class": "pyod.models.lof.LOF",
+          "grid": { 
+            "n_neighbors": [10, 20],
+            "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "vae": [
+        {
+          "class": "pyod.models.vae.VAE",
+          "grid": { 
+            "contamination": [0.1, 0.2, 0.3] }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+"ratio":{
+    "features": {
+      "dns.query.name": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "dns.answers.name": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "dns.response.code_name": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "dns.subdomain": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "dns.highest_registered_domain": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "destination_geo.organization_name": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      },
+      "destination.geo.country_name": {
+        "pipeline.transformations.wrappers.RatiosWrapper": {
+          "params": {
+            "lowercase": false
+          }
+        }
+      }
+    },
+    "estimators": {
+      "isolation_forest": [{
+        "class": "pyod.models.iforest.IForest",
+        "params": {"n_estimators": 100},
+        "grid": { "contamination": [0.1, 0.2, 0.3] }
+      }],
+      "lof": [
+        {
+          "class": "pyod.models.lof.LOF",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ],
+      "vae": [
+        {
+          "class": "pyod.models.vae.VAE",
+          "grid": { "contamination": [0.1, 0.2, 0.3] }
+        }
+      ]
+    }
+  }
+}

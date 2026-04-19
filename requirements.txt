@@ -6,6 +6,7 @@ dask==2025.1.0
 # Data processing
 pandas==2.3.3
 numpy==1.26.4
+elasticsearch>=8.0.0,<9.0.0
 
 # Machine Learning
 scikit-learn>=1.6.1
@@ -24,3 +25,4 @@ tqdm>=4.66.0
 python-dotenv==1.0.0
 graphviz==0.20.3
 random-string-detector==1.1.1
+

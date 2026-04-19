@@ -1,8 +1,8 @@
-"""Labeled windowed outlier detection benchmark (CSV source, metrics vs ground truth).
+"""Unlabeled windowed outlier detection (Elastic source, majority voting across grid combos).
 
 Aggregates consecutive feature vectors into fixed-size windows (mean or sum),
-runs detection on the windowed array, then expands sequence-level flags back
-to row level for TARGET_PATH output.
+runs detection on the windowed array, votes across per-combo variants, and
+expands voted sequence flags back to row level for TARGET_PATH.
 """
 from __future__ import annotations
 
@@ -15,29 +15,26 @@ import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 from dask.distributed import Client
-from dask_ml.model_selection import GridSearchCV
 
 from connectors.connector_interface import DataConnector
-from connectors.csv_connector import CSVConnector
+from connectors.elastic_connector import ElasticConnector
 from processing.playbook import (
-    FeatureContext, Playbook, build_summary,
+    FeatureContext, Playbook, task_summary, vote_labels,
     WINDOW_DEFAULTS,
     aggregate_features,
-    aggregate_labels,
     expand_labels_to_rows,
-    ground_truth_series,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class SequenceBenchmark(Playbook):
-    LABELED = True
-    OUTPUT_MODE = "w"
+class SequencePlaybook(Playbook):
+    LABELED = False
+    OUTPUT_MODE = "a"
     WINDOW: ClassVar[Dict[str, Any]] = WINDOW_DEFAULTS
 
     def _make_connector(self) -> DataConnector:
-        return CSVConnector()
+        return ElasticConnector()
 
     def _prepare_X(
         self,
@@ -73,21 +70,6 @@ class SequenceBenchmark(Playbook):
             feat_desc=feat_desc, n_rows=n_rows, slices=slices,
         )
 
-    def _prepare_Y(
-        self,
-        client: Client,
-        ground_truth: Optional[dd.Series],
-        ctx: FeatureContext,
-    ) -> Optional[da.Array]:
-        if ground_truth is None or ctx.slices is None:
-            return None
-        y_row = (ground_truth != self._normal_label).astype("int8")
-        y_np = y_row.to_dask_array(lengths=True).compute()
-        y_seq = aggregate_labels(y_np, ctx.slices)
-        ctx.extra["y_seq"] = y_seq
-        ctx.extra["seq_ground_truth"] = ground_truth_series(y_seq, self._normal_label)
-        return client.persist(da.from_array(y_seq, chunks="auto"))
-
     def _fit_and_label(
         self,
         est_obj: Any,
@@ -95,12 +77,7 @@ class SequenceBenchmark(Playbook):
         Y: Optional[da.Array],
         client: Client,
     ) -> Tuple[Any, np.ndarray]:
-        if isinstance(est_obj, GridSearchCV):
-            est_obj.fit(X, y=Y)
-            best_est = est_obj.best_estimator_.steps[-1][1]
-            best_est.labels_ = best_est.predict_chunked(X)
-            return est_obj, best_est.labels_
-        est_obj.fit(X, y=Y)
+        est_obj.fit(X)
         est = est_obj.steps[-1][1]
         est.labels_ = est.predict_chunked(X)
         return est_obj, est.labels_
@@ -114,21 +91,16 @@ class SequenceBenchmark(Playbook):
         ground_truth: Optional[dd.Series],
         ctx: FeatureContext,
     ) -> Dict[str, Any]:
-        seq_ground_truth = ctx.extra.get("seq_ground_truth")
+        labels = np.asarray(labels)
         row_flags = self._expand_row_mask(labels, ctx, ctx.n_rows)
         extra: Dict[str, Any] = {
             "sequence_config": json.dumps(self.WINDOW),
+            "n_sequences": int(labels.shape[0]),
+            "n_seq_anomalies": int((labels == -1).sum()),
+            "n_rows": ctx.n_rows,
             "n_row_anomalies": int((row_flags == -1).sum()),
         }
-        return build_summary(
-            task_name=task_name,
-            strategy=strategy,
-            trained_obj=trained_obj,
-            labels=labels,
-            ground_truth=seq_ground_truth,
-            normal_label=self._normal_label,
-            extra=extra,
-        )
+        return task_summary(task_name, strategy, labels, extra=extra)
 
     def _expand_row_mask(
         self,
@@ -139,27 +111,6 @@ class SequenceBenchmark(Playbook):
         if ctx.slices is None:
             return np.asarray(labels)
         return expand_labels_to_rows(np.asarray(labels), ctx.slices, n_rows)
-
-    def _after_task(
-        self,
-        client: Client,
-        strategy: str,
-        feat_desc: str,
-        task_name: str,
-        trained_obj: Any,
-        labels: np.ndarray,
-        ctx: FeatureContext,
-        full_df: pd.DataFrame,
-        target_path: Optional[str],
-    ) -> None:
-        if not target_path:
-            return
-        row_flags = self._expand_row_mask(labels, ctx, len(full_df))
-        n_written = self._write_anomaly_rows(full_df, row_flags == -1, target_path)
-        logger.info(
-            "    Wrote %d anomaly rows (%d flagged sequences) to %s",
-            n_written, int((np.asarray(labels) == -1).sum()), target_path,
-        )
 
     def _finalize_group(
         self,
@@ -172,4 +123,45 @@ class SequenceBenchmark(Playbook):
         full_df: pd.DataFrame,
         target_path: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        return None
+        if not per_model_labels:
+            return None
+
+        if len(per_model_labels) == 1:
+            if target_path:
+                row_flags = self._expand_row_mask(
+                    per_model_labels[0], ctx, len(full_df),
+                )
+                mask = row_flags == -1
+                if mask.any():
+                    n_written = self._write_anomaly_rows(full_df, mask, target_path)
+                    logger.info(
+                        "    Appended %d anomaly rows to %s", n_written, target_path,
+                    )
+            return None
+
+        voted = vote_labels(per_model_labels, self.VOTE_THRESHOLD)
+        row_flags = self._expand_row_mask(voted, ctx, len(full_df))
+        n_seq_anomalies = int((voted == -1).sum())
+        n_row_anomalies = int((row_flags == -1).sum())
+
+        vote_task = f"{strategy}__{feat_desc}__{group_key}__voted"
+        summary = task_summary(
+            vote_task, strategy, voted,
+            extra={
+                "n_models": len(per_model_labels),
+                "n_seq_anomalies": n_seq_anomalies,
+                "n_row_anomalies": n_row_anomalies,
+                "sequence_config": json.dumps(self.WINDOW),
+            },
+        )
+        logger.info(
+            "    %s  n_models=%d  n_seq_anomalies=%d  n_row_anomalies=%d (vote)",
+            vote_task, len(per_model_labels), n_seq_anomalies, n_row_anomalies,
+        )
+
+        if target_path and n_row_anomalies > 0:
+            n_written = self._write_anomaly_rows(full_df, row_flags == -1, target_path)
+            logger.info(
+                "    Appended %d voted anomaly rows to %s", n_written, target_path,
+            )
+        return summary

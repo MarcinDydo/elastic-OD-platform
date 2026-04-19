@@ -46,10 +46,10 @@ class CSVConnector(DataConnector):
         return out
 
     def save_row(self, row: Union[dict, pd.Series], path: Optional[str] = None) -> str:
-        """Append a single row to TARGET_PATH (writes header on first call)."""
-        out = path or os.environ.get("TARGET_PATH")
+        """Append a single row to RESULTS_PATH (writes header on first call)."""
+        out = path or os.environ.get("RESULTS_PATH")
         if not out:
-            raise RuntimeError("TARGET_PATH is required for dumping anomalies.")
+            raise RuntimeError("RESULTS_PATH is required for saving metrics rows.")
         if isinstance(row, dict):
             df = pd.json_normalize(row, sep="_")
         else:
