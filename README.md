@@ -49,6 +49,16 @@ ELASTIC_INDEX = "logs-*"
 ELASTIC_QUERY_PATH = "./configs/elastic_query.json"
 ```
 
+Config do budowy jobów z pipeline-ami powinien przyjmować następującą formę:
+```
+{
+"job_name":{
+  "features":{<feature transformations>}
+  "estimators":{<estimator objects>}
+  }, ...
+}
+```
+
 
 Aby następnie pobrać próbki i wyznaczyć odstające dane można uruchomić program poleceniem:
 
