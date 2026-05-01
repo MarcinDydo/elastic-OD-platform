@@ -1,69 +1,28 @@
 {
-  "tfidf_word": {
+  "fasttext": {
     "features": {
-      "_source.process_path": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
+      "request": {
+        "pipeline.transformations.wrappers.DocumentPoolWrapper": {
           "params": {
-            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
-            "lowercase": false,
-            "max_features": 500,
-            "max_df": 0.7
+            "model": "./data/Apache-access-log-web-Intrusion-Detection-fasttext.bin",
+            "pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,32}\\b"
           }
-        },
-        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
-          "params": {"norm": "l1"}
         }
       },
-      "_source.user_name": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
+      "referer": {
+        "pipeline.transformations.wrappers.DocumentPoolWrapper": {
           "params": {
-            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
-            "lowercase": false,
-            "max_features": 500,
-            "max_df": 0.7
+            "model": "./data/Apache-access-log-web-Intrusion-Detection-fasttext.bin",
+            "pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,32}\\b"
           }
-        },
-        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
-          "params": {"norm": "l1"}
         }
       },
-      "_source.user_account": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
+      "browser": {
+        "pipeline.transformations.wrappers.DocumentPoolWrapper": {
           "params": {
-            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
-            "lowercase": false,
-            "max_features": 500,
-            "max_df": 0.7
+            "model": "./data/Apache-access-log-web-Intrusion-Detection-fasttext.bin",
+            "pattern": "\\b(?![0-9]+\\b)(?![0-9]+[.\\-][0-9.\\-]*\\b)(?!(?:[0-9a-fA-F]{2}){2,}\\b)[a-zA-Z0-9._\\-%]{3,32}\\b"
           }
-        },
-        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
-          "params": {"norm": "l1"}
-        }
-      },
-      "_source.TargetObject": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
-          "params": {
-            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
-            "lowercase": false,
-            "max_features": 500,
-            "max_df": 0.7
-          }
-        },
-        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
-          "params": {"norm": "l1"}
-        }
-      },
-      "_source.z_elastic_ecs.event.action": {
-        "dask_ml.feature_extraction.text.CountVectorizer": {
-          "params": {
-            "token_pattern": "\\b(?![0-9]+(?:[.-][0-9.-]*)?\\b)(?!(?:[0-9A-Fa-f]{2}){2,}\\b)[A-Za-z0-9._%-]{3,}\\b",
-            "lowercase": false,
-            "max_features": 500,
-            "max_df": 0.7
-          }
-        },
-        "pipeline.transformations.wrappers.TfidfTransformerWrapper": {
-          "params": {"norm": "l1"}
         }
       }
     },
@@ -80,19 +39,11 @@
           "grid": { "contamination": [0.1, 0.2, 0.3] }
         }
       ],
-      "knn": [
+      "Lunar": [
         {
-          "class": "pyod.models.knn.KNN",
+          "class": "pyod.models.lunar.LUNAR",
           "grid": { 
-            "n_neighbors": [5, 10],
-            "contamination": [0.1, 0.2, 0.3] }
-        }
-      ],
-      "lof": [
-        {
-          "class": "pyod.models.lof.LOF",
-          "grid": { 
-            "n_neighbors": [10, 20],
+            "n_neighbours": [5, 10],
             "contamination": [0.1, 0.2, 0.3] }
         }
       ],
@@ -100,6 +51,7 @@
         {
           "class": "pyod.models.vae.VAE",
           "grid": { 
+            "epoch_num": [20, 50],
             "contamination": [0.1, 0.2, 0.3] }
         }
       ]

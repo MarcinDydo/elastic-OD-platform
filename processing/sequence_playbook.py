@@ -1,5 +1,5 @@
-"""Unlabeled windowed outlier detection (Elastic source, majority voting across grid combos).
-
+"""
+Unlabeled windowed outlier detection (Elasticsearch source, majority voting across grid combos).
 Aggregates consecutive feature vectors into fixed-size windows (mean or sum),
 runs detection on the windowed array, votes across per-combo variants, and
 expands voted sequence flags back to row level for TARGET_PATH.

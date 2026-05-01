@@ -9,3 +9,5 @@ cache
 __pycache__/
 test/
 output/
+configs/*copy*
+.claude

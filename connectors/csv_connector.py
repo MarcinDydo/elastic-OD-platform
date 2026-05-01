@@ -31,8 +31,12 @@ class CSVConnector(DataConnector):
             self.path,
             blocksize=self.blocksize,
             assume_missing=self.assume_missing,
-            usecols=self.usecols,
+            dtype=str,  # Read all columns as strings to avoid type inference
         )
+        if self.usecols:
+            missing = [col for col in self.usecols if col not in self.dataframe.columns]
+            if missing:
+                raise ValueError(f"Requested columns not available in csv data: {missing}")
         return self.dataframe #delayed dask.DataFrame object
 
     def save(self, df: Union[pd.DataFrame, dd.DataFrame], path: Optional[str] = None) -> str:

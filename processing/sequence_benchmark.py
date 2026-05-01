@@ -1,5 +1,4 @@
 """Labeled windowed outlier detection benchmark (CSV source, metrics vs ground truth).
-
 Aggregates consecutive feature vectors into fixed-size windows (mean or sum),
 runs detection on the windowed array, then expands sequence-level flags back
 to row level for TARGET_PATH output.

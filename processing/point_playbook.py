@@ -81,6 +81,7 @@ class PointPlaybook(Playbook):
         if len(per_model_labels) == 1:
             # Singleton group — write the single model's anomalies, no vote summary.
             if target_path:
+                target_path = f"{target_path}{strategy}.csv"
                 mask = np.asarray(per_model_labels[0]) == -1
                 if mask.any():
                     n_written = self._write_anomaly_rows(full_df, mask, target_path)
@@ -88,7 +89,7 @@ class PointPlaybook(Playbook):
                         "    Appended %d anomaly rows to %s", n_written, target_path,
                     )
             return None
-
+        
         voted = vote_labels(per_model_labels, self.VOTE_THRESHOLD)
         vote_task = f"{strategy}__{feat_desc}__{group_key}__voted"
         summary = task_summary(
@@ -100,6 +101,7 @@ class PointPlaybook(Playbook):
         )
 
         if target_path and summary["n_anomalies"] > 0:
+            target_path = f"{target_path}{strategy}.csv"
             n_written = self._write_anomaly_rows(full_df, voted == -1, target_path)
             logger.info(
                 "    Appended %d voted anomaly rows to %s", n_written, target_path,

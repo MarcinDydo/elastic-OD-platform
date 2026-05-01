@@ -56,11 +56,9 @@ class ElasticConnector(DataConnector):
     def _client(self) -> Elasticsearch:
         scheme = "https" if self.use_ssl else "http"
         return Elasticsearch(
-            [{"host": self.host, "port": self.port}],
-            use_ssl=self.use_ssl,
-            scheme=scheme,
+            [{"host": self.host, "port": self.port, "scheme": "https"}],
             api_key=self.api_key,
-            verify_certs=self.verify_certs,
+            verify_certs=False,
             timeout=30,
             #connection_class=RequestsHttpConnection,
         )
@@ -103,6 +101,5 @@ class ElasticConnector(DataConnector):
             missing = [col for col in usecols if col not in pdf.columns]
             if missing:
                 raise ValueError(f"Requested columns not available in elastic data: {missing}")
-            pdf = pdf[list(usecols)]
         self.dataframe = dd.from_pandas(pdf, npartitions=self.npartitions)
         return self.dataframe

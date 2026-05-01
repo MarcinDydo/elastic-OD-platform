@@ -1,35 +1,25 @@
 {
   "_source": [
-    "dns.query.name",
-    "dns.answers.name",
-    "dns.query.class_name",
-    "client.ip",
-    "server.ip",
-    "dns.response.code_name",
-    "dns.subdomain",
-    "dns.truncated",
-    "dns.highest_registered_domain",
-    "destination_geo.organization_name",
-    "destination_geo.ip",
-    "destination.geo.country_name",
-    "destination.geo.timezone",
-    "destination.geo.country_iso_code"
+    "rule.rule",
+    "rule.name",
+    "message"
   ],
   "query": {
     "bool": {
       "filter": [
+        { "term": { "data_stream.dataset": "suricata" } },
+        { "range": {
+    "@timestamp": {
+      "gte": "2026-04-25T00:00:00.000Z",
+      "lte": "2026-04-29T23:59:59.999Z"
+    }
+  }}
+      ],
+      "must_not": [
         {
-          "term": {
-            "container.id": "dns.log"
-          }
-        },
-        {
-          "range": {
-            "@timestamp": {
-              "gte": "now-4h",
-              "lte": "now"
-            }
-          }
+          "query_string": {
+            "fields": ["rule.name"],
+            "query": "GPL SNMP public access udp"}
         }
       ]
     }
